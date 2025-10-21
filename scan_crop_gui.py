@@ -212,15 +212,17 @@ class SourceImageCanvas(tk.Canvas):
     Left panel: Displays source scanned image with crop region overlays.
     Handles mouse interactions for region manipulation.
     """
-    def __init__(self, parent, app_state):
+    def __init__(self, parent, app_state, app):
         super().__init__(parent, bg="gray", highlightthickness=0)
         self.app_state = app_state
+        self.app = app
         self.scale_factor = 1.0
         self.image_offset = (0, 0)
         self.photo_image = None  # Keep reference to prevent GC
 
-        # Bind resize event
+        # Bind events
         self.bind("<Configure>", self.on_resize)
+        self.bind("<Button-1>", self.on_mouse_down)
 
     def on_resize(self, event):
         """Handle canvas resize"""
@@ -293,6 +295,21 @@ class SourceImageCanvas(tk.Canvas):
         self.display_image()
         self.draw_regions()
 
+    def on_mouse_down(self, event):
+        """Handle mouse click on canvas"""
+        # Convert to image coordinates
+        img_x, img_y = self.canvas_to_image(event.x, event.y)
+
+        # Try to select region at this point
+        selected = self.app_state.select_region_at_point(img_x, img_y)
+
+        # Refresh display
+        self.refresh()
+
+        # Sync with right panel
+        if self.app:
+            self.app.sync_selection()
+
     def draw_regions(self):
         """Draw all crop region rectangles"""
         for region in self.app_state.photo_regions:
@@ -311,6 +328,10 @@ class SourceImageCanvas(tk.Canvas):
                                 outline=color, width=width,
                                 tags=f"region_{region.region_id}")
 
+            # Draw resize handles for selected region
+            if is_selected:
+                self.draw_resize_handles(x1, y1, x2, y2)
+
             # Show rotation indicator if rotated
             if region.rotation != 0:
                 cx = (x1 + x2) / 2
@@ -318,6 +339,28 @@ class SourceImageCanvas(tk.Canvas):
                 self.create_text(cx, cy, text=f"{region.rotation}°",
                                fill=color, font=("Arial", 12, "bold"),
                                tags=f"region_{region.region_id}")
+
+    def draw_resize_handles(self, x1, y1, x2, y2):
+        """Draw 8 resize handles on selected region"""
+        handle_size = 8
+        handles = [
+            (x1, y1),           # NW corner
+            ((x1+x2)/2, y1),    # N midpoint
+            (x2, y1),           # NE corner
+            (x2, (y1+y2)/2),    # E midpoint
+            (x2, y2),           # SE corner
+            ((x1+x2)/2, y2),    # S midpoint
+            (x1, y2),           # SW corner
+            (x1, (y1+y2)/2),    # W midpoint
+        ]
+
+        for hx, hy in handles:
+            self.create_rectangle(
+                hx - handle_size/2, hy - handle_size/2,
+                hx + handle_size/2, hy + handle_size/2,
+                fill="white", outline="green", width=2,
+                tags="handle"
+            )
 
 
 # ============================================================================
@@ -335,10 +378,14 @@ class PhotoItemWidget(tk.Frame):
         self.photo_list = photo_list_panel
         self.photo_image = None  # Keep reference
 
+        # Bind click event to select this card
+        self.bind("<Button-1>", self.on_click)
+
         # Header with photo number
         idx = self.app_state.photo_regions.index(region) + 1
         header = tk.Label(self, text=f"Photo {idx}", font=("Arial", 10, "bold"))
         header.pack()
+        header.bind("<Button-1>", self.on_click)  # Propagate clicks
 
         # Thumbnail canvas
         self.thumbnail_canvas = tk.Canvas(self, width=200, height=200,
@@ -427,6 +474,24 @@ class PhotoItemWidget(tk.Frame):
         # TODO: Implement reordering
         pass
 
+    def on_click(self, event):
+        """Handle click on this card"""
+        # Select this region
+        self.app_state.selected_region_id = self.region.region_id
+
+        # Sync with left panel and update highlights
+        if self.photo_list.app:
+            self.photo_list.app.sync_selection()
+
+    def update_highlight(self):
+        """Update visual highlight based on selection state"""
+        is_selected = (self.region.region_id == self.app_state.selected_region_id)
+
+        if is_selected:
+            self.config(bg="lightyellow", relief=tk.SOLID, borderwidth=3)
+        else:
+            self.config(bg="SystemButtonFace", relief=tk.RAISED, borderwidth=2)
+
 
 class PhotoListPanel(tk.Frame):
     """
@@ -513,7 +578,7 @@ class PhotoCropperApp(tk.Tk):
 
         # LEFT PANEL: Source image canvas
         self.left_frame = tk.Frame(self.paned_window)
-        self.source_canvas = SourceImageCanvas(self.left_frame, self.app_state)
+        self.source_canvas = SourceImageCanvas(self.left_frame, self.app_state, self)
         self.source_canvas.pack(fill=tk.BOTH, expand=True)
 
         # RIGHT PANEL: Photo list
@@ -631,6 +696,15 @@ class PhotoCropperApp(tk.Tk):
             "Version 1.0\n"
             "Built with tkinter and PIL"
         )
+
+    def sync_selection(self):
+        """Synchronize selection highlighting between left and right panels"""
+        # Update left panel (will redraw with green border + handles)
+        self.source_canvas.refresh()
+
+        # Update right panel highlights
+        for widget in self.photo_list.photo_widgets:
+            widget.update_highlight()
 
 
 # ============================================================================
