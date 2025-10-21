@@ -828,6 +828,37 @@ class PhotoListPanel(tk.Frame):
             widget.pack(fill=tk.X, padx=5, pady=5)
             self.photo_widgets.append(widget)
 
+    def scroll_to_selected(self):
+        """Scroll to show the selected photo card"""
+        if not self.app_state.selected_region_id:
+            return
+
+        # Find the selected widget
+        for widget in self.photo_widgets:
+            if widget.region.region_id == self.app_state.selected_region_id:
+                # Update the canvas to ensure geometry is current
+                self.scrollable_frame.update_idletasks()
+
+                # Get widget position relative to scrollable_frame
+                widget_y = widget.winfo_y()
+                widget_height = widget.winfo_height()
+
+                # Get canvas viewport size
+                canvas_height = self.canvas.winfo_height()
+                scrollregion = self.canvas.bbox("all")
+                if not scrollregion:
+                    return
+
+                total_height = scrollregion[3] - scrollregion[1]
+
+                # Calculate position to center the widget in viewport
+                center_position = widget_y + (widget_height / 2) - (canvas_height / 2)
+                scroll_fraction = max(0, min(1, center_position / total_height))
+
+                # Scroll to position
+                self.canvas.yview_moveto(scroll_fraction)
+                break
+
     def export_all(self):
         """Export all photos to selected directory"""
         if not self.app_state.photo_regions:
@@ -879,9 +910,10 @@ class PhotoListPanel(tk.Frame):
                                    f"Failed to export photo {idx}: {str(e)}")
                 return
 
-        # Show success message
-        messagebox.showinfo("Export Complete",
-                          f"Successfully exported {exported_count} photo(s) to:\n{output_path}")
+        # Show success message in status bar
+        self.app.status_bar.config(
+            text=f"Successfully exported {exported_count} photo(s) to: {output_path}"
+        )
 
 
 # ============================================================================
@@ -922,6 +954,11 @@ class PhotoCropperApp(tk.Tk):
         # Add panels to paned window (60/40 split)
         self.paned_window.add(self.left_frame, width=720)
         self.paned_window.add(self.right_frame, width=480)
+
+        # Status bar at bottom
+        self.status_bar = tk.Label(self, text="Ready", bd=1, relief=tk.SUNKEN,
+                                   anchor=tk.W, padx=5)
+        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
         # Show welcome message
         self.show_welcome()
@@ -995,19 +1032,22 @@ class PhotoCropperApp(tk.Tk):
             self.source_canvas.refresh()
             self.photo_list.refresh()
 
-            # Show result
+            # Show result in status bar (non-intrusive)
             if detected_regions:
-                messagebox.showinfo(
-                    "Detection Complete",
-                    f"Found {len(detected_regions)} photo(s) in {path.name}\n\n"
-                    f"Adjust crop regions on the left panel.\n"
-                    f"Rotate photos on the right panel."
+                self.status_bar.config(
+                    text=f"Found {len(detected_regions)} photo(s) in {path.name}. "
+                         f"Adjust crops on left, rotate on right."
                 )
             else:
+                self.status_bar.config(
+                    text=f"No photos detected in {path.name}. "
+                         f"Use Edit → Add Region to create manual regions."
+                )
+                # Show warning dialog only when nothing detected (important)
                 messagebox.showwarning(
                     "No Photos Detected",
                     f"Could not detect any photos in {path.name}\n\n"
-                    f"You can manually add regions using Edit → Add Region."
+                    f"You can manually add regions by dragging on the left canvas."
                 )
 
         except Exception as e:
@@ -1038,6 +1078,9 @@ class PhotoCropperApp(tk.Tk):
         # Update right panel highlights
         for widget in self.photo_list.photo_widgets:
             widget.update_highlight()
+
+        # Auto-scroll to selected card
+        self.photo_list.scroll_to_selected()
 
 
 # ============================================================================
