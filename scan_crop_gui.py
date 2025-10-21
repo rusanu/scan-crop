@@ -17,6 +17,107 @@ import numpy as np
 
 
 # ============================================================================
+# Detection Engine
+# ============================================================================
+
+def find_photo_contours(image):
+    """
+    Detect individual photos in the scanned image using contour detection.
+
+    Args:
+        image: OpenCV image (BGR format)
+
+    Returns:
+        List of bounding rectangles (x, y, w, h) for detected photos
+    """
+    # Convert to grayscale
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Apply binary threshold to separate photos from background
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # Invert if needed (photos should be white/light in binary image)
+    if np.mean(binary) < 127:
+        binary = cv2.bitwise_not(binary)
+
+    # Morphological operations to clean up the binary image
+    kernel = np.ones((5, 5), np.uint8)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
+
+    # Find contours (use RETR_TREE to get nested contours)
+    contours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Filter contours by area and aspect ratio
+    img_area = image.shape[0] * image.shape[1]
+    min_area = img_area * 0.01   # Minimum 1% of image area
+    max_area = img_area * 0.5    # Maximum 50% of image area
+    bounding_boxes = []
+
+    for contour in contours:
+        area = cv2.contourArea(contour)
+
+        # Filter by area
+        if area < min_area or area > max_area:
+            continue
+
+        # Get bounding rectangle
+        x, y, w, h = cv2.boundingRect(contour)
+
+        # Filter by aspect ratio (photos are typically between 1:2 and 2:1)
+        aspect_ratio = w / h if h > 0 else 0
+        if aspect_ratio < 0.3 or aspect_ratio > 3.5:
+            continue
+
+        # Filter by minimum dimensions (at least 50x50 pixels)
+        if w < 50 or h < 50:
+            continue
+
+        bounding_boxes.append((x, y, w, h))
+
+    return bounding_boxes
+
+
+def detect_photos(pil_image: Image.Image) -> List:
+    """
+    Run detection algorithm on PIL Image.
+    Returns list of PhotoRegion objects (auto-detected).
+
+    Args:
+        pil_image: PIL Image object
+
+    Returns:
+        List of PhotoRegion objects with detected crop regions
+    """
+    # Convert PIL to OpenCV (BGR)
+    img_array = np.array(pil_image)
+    # PIL uses RGB, OpenCV uses BGR
+    if len(img_array.shape) == 3 and img_array.shape[2] == 3:
+        cv_image = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+    else:
+        cv_image = img_array
+
+    # Run detection
+    bounding_boxes = find_photo_contours(cv_image)
+
+    # Convert to PhotoRegion objects
+    # Import PhotoRegion here to avoid circular import
+    from dataclasses import dataclass, field
+
+    regions = []
+    for idx, (x, y, w, h) in enumerate(bounding_boxes):
+        region = PhotoRegion(
+            x=x, y=y, width=w, height=h,
+            rotation=0,
+            is_manual=False,
+            list_order=idx
+        )
+        regions.append(region)
+
+    return regions
+
+
+# ============================================================================
 # Data Structures
 # ============================================================================
 
@@ -483,19 +584,38 @@ class PhotoCropperApp(tk.Tk):
             self.app_state.image_path = path
             self.app_state.original_image = Image.open(path)
 
-            # Display on left panel
-            self.source_canvas.refresh()
+            # Run detection
+            print(f"Running detection on {path.name}...")
+            detected_regions = detect_photos(self.app_state.original_image)
 
-            # TODO: Run detection and populate regions
-            # For now, just clear regions
-            self.app_state.photo_regions.clear()
+            # Store detected regions
+            self.app_state.photo_regions = detected_regions
+
+            print(f"Found {len(detected_regions)} photo(s)")
+
+            # Update both panels
+            self.source_canvas.refresh()
             self.photo_list.refresh()
 
-            messagebox.showinfo("Image Loaded",
-                              f"Loaded: {path.name}\n\nDetection will be implemented in next step.")
+            # Show result
+            if detected_regions:
+                messagebox.showinfo(
+                    "Detection Complete",
+                    f"Found {len(detected_regions)} photo(s) in {path.name}\n\n"
+                    f"Adjust crop regions on the left panel.\n"
+                    f"Rotate photos on the right panel."
+                )
+            else:
+                messagebox.showwarning(
+                    "No Photos Detected",
+                    f"Could not detect any photos in {path.name}\n\n"
+                    f"You can manually add regions using Edit → Add Region."
+                )
 
         except Exception as e:
             messagebox.showerror("Error Loading Image", str(e))
+            import traceback
+            traceback.print_exc()
 
     def add_manual_region(self):
         """Add manual crop region"""
