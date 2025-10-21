@@ -21,6 +21,15 @@ If you've scanned multiple physical photos on a flatbed scanner in one pass, sca
 
 ## Installation
 
+### Download Standalone Executable (Recommended)
+
+**No Python installation required!**
+
+1. Download the latest `scan-crop.exe` from [Releases](https://github.com/rusanu/scan-crop/releases/latest)
+2. Run it directly - no installation needed
+
+### Run from Source
+
 **Requirements:** Python 3.11 or higher
 
 1. Clone this repository:
@@ -43,21 +52,18 @@ python scan_crop_gui.py
 
 ## Usage
 
-### Launch the GUI
+### Launch the Application
 
-**Open with file browser:**
+**Using the standalone executable:**
+- Double-click `scan-crop.exe` to launch
+- Or drag a JPEG image file onto `scan-crop.exe`
+- Or run from command line: `scan-crop.exe path\to\scan.jpg`
+
+**Running from source:**
 ```cmd
-python scan_crop_gui.py
+python scan_crop_gui.py              # Launch with file browser
+python scan_crop_gui.py scan.jpg     # Open specific image
 ```
-Then use the "Open Image..." button or drag an image onto the window.
-
-**Open with image file:**
-```cmd
-python scan_crop_gui.py path\to\scan.jpg
-```
-
-**Drag and drop:**
-Drag a JPEG image file directly onto `scan_crop_gui.py` in File Explorer.
 
 ### Using the Interface
 
