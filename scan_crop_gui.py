@@ -14,6 +14,25 @@ import uuid
 from PIL import Image, ImageTk
 import cv2
 import numpy as np
+from enum import Enum
+
+
+# ============================================================================
+# Enums and Constants
+# ============================================================================
+
+class InteractionMode(Enum):
+    """Mouse interaction modes for canvas"""
+    NONE = 0
+    DRAGGING = 1          # Moving entire region
+    RESIZING_NW = 2       # Resizing from northwest corner
+    RESIZING_N = 3        # Resizing from north edge
+    RESIZING_NE = 4       # Resizing from northeast corner
+    RESIZING_E = 5        # Resizing from east edge
+    RESIZING_SE = 6       # Resizing from southeast corner
+    RESIZING_S = 7        # Resizing from south edge
+    RESIZING_SW = 8       # Resizing from southwest corner
+    RESIZING_W = 9        # Resizing from west edge
 
 
 # ============================================================================
@@ -220,9 +239,17 @@ class SourceImageCanvas(tk.Canvas):
         self.image_offset = (0, 0)
         self.photo_image = None  # Keep reference to prevent GC
 
+        # Interaction state
+        self.interaction_mode = InteractionMode.NONE
+        self.drag_start = None  # (x, y) in image space
+        self.drag_region_start = None  # Original (x, y, w, h) of region being edited
+
         # Bind events
         self.bind("<Configure>", self.on_resize)
         self.bind("<Button-1>", self.on_mouse_down)
+        self.bind("<B1-Motion>", self.on_mouse_drag)
+        self.bind("<ButtonRelease-1>", self.on_mouse_up)
+        self.bind("<Motion>", self.on_mouse_move)
 
     def on_resize(self, event):
         """Handle canvas resize"""
@@ -300,8 +327,30 @@ class SourceImageCanvas(tk.Canvas):
         # Convert to image coordinates
         img_x, img_y = self.canvas_to_image(event.x, event.y)
 
+        # Check if clicking on a resize handle first
+        selected_region = self.app_state.get_selected_region()
+        if selected_region:
+            mode = self.get_handle_at_point(event.x, event.y, selected_region)
+            if mode != InteractionMode.NONE:
+                # Starting resize operation
+                self.interaction_mode = mode
+                self.drag_start = (img_x, img_y)
+                self.drag_region_start = (selected_region.x, selected_region.y,
+                                         selected_region.width, selected_region.height)
+                return
+
         # Try to select region at this point
         selected = self.app_state.select_region_at_point(img_x, img_y)
+
+        if selected:
+            # Start drag operation
+            self.interaction_mode = InteractionMode.DRAGGING
+            self.drag_start = (img_x, img_y)
+            self.drag_region_start = (selected.x, selected.y, selected.width, selected.height)
+        else:
+            # Deselect
+            self.interaction_mode = InteractionMode.NONE
+            self.app_state.selected_region_id = None
 
         # Refresh display
         self.refresh()
@@ -309,6 +358,61 @@ class SourceImageCanvas(tk.Canvas):
         # Sync with right panel
         if self.app:
             self.app.sync_selection()
+
+    def on_mouse_drag(self, event):
+        """Handle mouse drag"""
+        if self.interaction_mode == InteractionMode.NONE or not self.drag_start:
+            return
+
+        # Convert to image coordinates
+        img_x, img_y = self.canvas_to_image(event.x, event.y)
+        dx = img_x - self.drag_start[0]
+        dy = img_y - self.drag_start[1]
+
+        selected_region = self.app_state.get_selected_region()
+        if not selected_region or not self.drag_region_start:
+            return
+
+        orig_x, orig_y, orig_w, orig_h = self.drag_region_start
+
+        if self.interaction_mode == InteractionMode.DRAGGING:
+            # Move entire region
+            selected_region.x = max(0, orig_x + dx)
+            selected_region.y = max(0, orig_y + dy)
+
+        else:
+            # Resizing - update based on which handle
+            self.resize_region(selected_region, orig_x, orig_y, orig_w, orig_h, dx, dy)
+
+        # Refresh display
+        self.refresh()
+
+    def on_mouse_up(self, event):
+        """Handle mouse release"""
+        if self.interaction_mode != InteractionMode.NONE:
+            # Update thumbnails in right panel after drag/resize
+            if self.app:
+                for widget in self.app.photo_list.photo_widgets:
+                    if widget.region.region_id == self.app_state.selected_region_id:
+                        widget.update_thumbnail()
+                        break
+
+        self.interaction_mode = InteractionMode.NONE
+        self.drag_start = None
+        self.drag_region_start = None
+
+    def on_mouse_move(self, event):
+        """Handle mouse move (update cursor)"""
+        if self.interaction_mode != InteractionMode.NONE:
+            return  # Don't change cursor during drag
+
+        # Check if hovering over resize handle
+        selected_region = self.app_state.get_selected_region()
+        if selected_region:
+            mode = self.get_handle_at_point(event.x, event.y, selected_region)
+            self.update_cursor(mode)
+        else:
+            self.config(cursor="")
 
     def draw_regions(self):
         """Draw all crop region rectangles"""
@@ -361,6 +465,83 @@ class SourceImageCanvas(tk.Canvas):
                 fill="white", outline="green", width=2,
                 tags="handle"
             )
+
+    def get_handle_at_point(self, canvas_x, canvas_y, region):
+        """Check if point is on a resize handle. Returns InteractionMode."""
+        # Convert region to canvas coords
+        x1, y1 = self.image_to_canvas(region.x, region.y)
+        x2, y2 = self.image_to_canvas(region.x + region.width, region.y + region.height)
+
+        handle_size = 8
+        tolerance = handle_size / 2
+
+        # Check each handle position
+        handles = [
+            ((x1, y1), InteractionMode.RESIZING_NW),
+            (((x1+x2)/2, y1), InteractionMode.RESIZING_N),
+            ((x2, y1), InteractionMode.RESIZING_NE),
+            ((x2, (y1+y2)/2), InteractionMode.RESIZING_E),
+            ((x2, y2), InteractionMode.RESIZING_SE),
+            (((x1+x2)/2, y2), InteractionMode.RESIZING_S),
+            ((x1, y2), InteractionMode.RESIZING_SW),
+            ((x1, (y1+y2)/2), InteractionMode.RESIZING_W),
+        ]
+
+        for (hx, hy), mode in handles:
+            if abs(canvas_x - hx) <= tolerance and abs(canvas_y - hy) <= tolerance:
+                return mode
+
+        return InteractionMode.NONE
+
+    def resize_region(self, region, orig_x, orig_y, orig_w, orig_h, dx, dy):
+        """Resize region based on interaction mode and delta"""
+        mode = self.interaction_mode
+
+        # Corners
+        if mode == InteractionMode.RESIZING_NW:
+            region.x = max(0, orig_x + dx)
+            region.y = max(0, orig_y + dy)
+            region.width = max(50, orig_w - dx)
+            region.height = max(50, orig_h - dy)
+        elif mode == InteractionMode.RESIZING_NE:
+            region.y = max(0, orig_y + dy)
+            region.width = max(50, orig_w + dx)
+            region.height = max(50, orig_h - dy)
+        elif mode == InteractionMode.RESIZING_SE:
+            region.width = max(50, orig_w + dx)
+            region.height = max(50, orig_h + dy)
+        elif mode == InteractionMode.RESIZING_SW:
+            region.x = max(0, orig_x + dx)
+            region.width = max(50, orig_w - dx)
+            region.height = max(50, orig_h + dy)
+
+        # Edges
+        elif mode == InteractionMode.RESIZING_N:
+            region.y = max(0, orig_y + dy)
+            region.height = max(50, orig_h - dy)
+        elif mode == InteractionMode.RESIZING_S:
+            region.height = max(50, orig_h + dy)
+        elif mode == InteractionMode.RESIZING_E:
+            region.width = max(50, orig_w + dx)
+        elif mode == InteractionMode.RESIZING_W:
+            region.x = max(0, orig_x + dx)
+            region.width = max(50, orig_w - dx)
+
+    def update_cursor(self, mode):
+        """Update cursor based on interaction mode"""
+        cursors = {
+            InteractionMode.NONE: "",
+            InteractionMode.DRAGGING: "fleur",
+            InteractionMode.RESIZING_NW: "nw-resize",
+            InteractionMode.RESIZING_N: "n-resize",
+            InteractionMode.RESIZING_NE: "ne-resize",
+            InteractionMode.RESIZING_E: "e-resize",
+            InteractionMode.RESIZING_SE: "se-resize",
+            InteractionMode.RESIZING_S: "s-resize",
+            InteractionMode.RESIZING_SW: "sw-resize",
+            InteractionMode.RESIZING_W: "w-resize",
+        }
+        self.config(cursor=cursors.get(mode, ""))
 
 
 # ============================================================================
