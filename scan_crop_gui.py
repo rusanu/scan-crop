@@ -18,6 +18,12 @@ import cv2
 import numpy as np
 from enum import Enum
 
+# Import version info
+try:
+    from version import __version__
+except ImportError:
+    __version__ = "dev"
+
 
 # ============================================================================
 # Enums and Constants
@@ -1150,10 +1156,11 @@ Tip: Hold arrow keys for continuous movement/resizing"""
         """Show about dialog"""
         messagebox.showinfo(
             "About Photo Cropper",
-            "Photo Cropper - scan-crop GUI\n\n"
-            "Extract individual photos from scanned images.\n\n"
-            "Version 1.0\n"
-            "Built with tkinter and PIL"
+            f"Photo Cropper - scan-crop GUI\n\n"
+            f"Extract individual photos from scanned images.\n\n"
+            f"Version {__version__}\n"
+            f"Built with tkinter, PIL, and OpenCV\n\n"
+            f"https://github.com/rusanu/scan-crop"
         )
 
     def sync_selection(self):

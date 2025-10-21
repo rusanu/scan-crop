@@ -1,0 +1,98 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+
+    - name: Extract version from tag (if tagged)
+      id: get_version
+      shell: pwsh
+      run: |
+        if ($env:GITHUB_REF -match 'refs/tags/v(.+)') {
+          $version = $matches[1]
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+          echo "IS_RELEASE=true" >> $env:GITHUB_OUTPUT
+          # Update version.py with tag version
+          $content = @"
+        ```"""Version information for scan-crop"""
+
+        __version__ = "$version"
+        __version_info__ = tuple(map(int, "$version".split('.')))
+        "@
+          $content | Set-Content -Path version.py
+        } else {
+          $commit = $env:GITHUB_SHA.Substring(0,7)
+          $version = "dev-$commit"
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+          echo "IS_RELEASE=false" >> $env:GITHUB_OUTPUT
+          # Update version.py with dev version
+          $content = @"
+        ```"""Version information for scan-crop"""
+
+        __version__ = "$version"
+        __version_info__ = (0, 0, 0)
+        "@
+          $content | Set-Content -Path version.py
+        }
+        echo "Building version: $version"
+
+    - name: Build executable with PyInstaller
+      run: |
+        pyinstaller --onefile `
+          --name scan-crop `
+          --windowed `
+          --icon=NONE `
+          --add-data "version.py;." `
+          scan_crop_gui.py
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: scan-crop-${{ steps.get_version.outputs.VERSION }}
+        path: dist/scan-crop.exe
+        retention-days: 30
+
+    - name: Create Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: dist/scan-crop.exe
+        body: |
+          ## scan-crop ${{ steps.get_version.outputs.VERSION }}
+
+          Windows executable for extracting individual photos from scanned images.
+
+          **Installation:** Download `scan-crop.exe` and run it directly (no installation needed)
+
+          **Usage:**
+          - Launch the app and click "Open Image..."
+          - Or drag a JPG file onto scan-crop.exe
+          - Or run from command line: `scan-crop.exe image.jpg`
+
+          Built from commit ${{ github.sha }}
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
