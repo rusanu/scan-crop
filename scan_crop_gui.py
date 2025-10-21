@@ -779,6 +779,18 @@ class PhotoCropperApp(tk.Tk):
         self.toolbar = tk.Frame(self, relief=tk.RAISED, borderwidth=2)
         self.toolbar.pack(side=tk.TOP, fill=tk.X)
 
+        # Open Image button (always enabled)
+        self.open_btn = tk.Button(
+            self.toolbar, text="Open Image...",
+            command=self.open_image
+        )
+        self.open_btn.pack(side=tk.LEFT, padx=2, pady=2)
+
+        # Separator
+        tk.Frame(self.toolbar, width=2, bg="gray", relief=tk.SUNKEN).pack(
+            side=tk.LEFT, fill=tk.Y, padx=5, pady=2
+        )
+
         # Rotation buttons
         self.rotate_ccw_btn = tk.Button(
             self.toolbar, text="⟲ Rotate CCW",
@@ -818,6 +830,19 @@ class PhotoCropperApp(tk.Tk):
             command=self.export_all_photos
         )
         self.export_all_btn.pack(side=tk.LEFT, padx=2, pady=2)
+
+    def open_image(self):
+        """Open image file dialog and load image"""
+        file_path = filedialog.askopenfilename(
+            title="Select scanned image",
+            filetypes=[
+                ("JPEG files", "*.jpg *.jpeg"),
+                ("All files", "*.*")
+            ]
+        )
+
+        if file_path:
+            self.load_image(Path(file_path))
 
     def update_toolbar_state(self):
         """Enable/disable toolbar buttons based on selection"""
@@ -916,49 +941,118 @@ class PhotoCropperApp(tk.Tk):
         menubar = tk.Menu(self)
         self.config(menu=menubar)
 
-        # File menu
-        file_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="File", menu=file_menu)
-        file_menu.add_command(label="Open Image...", command=self.open_image,
-                             accelerator="Ctrl+O")
-        file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.quit)
-
-        # Edit menu
-        edit_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Edit", menu=edit_menu)
-        edit_menu.add_command(label="Add Region Manually...",
-                             command=self.add_manual_region)
-
-        # Help menu
+        # Help menu only (actions are in toolbar)
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
+        help_menu.add_command(label="Keyboard Shortcuts", command=self.show_shortcuts)
+        help_menu.add_separator()
         help_menu.add_command(label="About", command=self.show_about)
 
         # Keyboard shortcuts
-        self.bind("<Control-o>", lambda e: self.open_image())
+        self.bind("<Delete>", lambda e: self.delete_selected_region())
+        self.bind("<Up>", lambda e: self.move_selected_region(0, -1))
+        self.bind("<Down>", lambda e: self.move_selected_region(0, 1))
+        self.bind("<Left>", lambda e: self.move_selected_region(-1, 0))
+        self.bind("<Right>", lambda e: self.move_selected_region(1, 0))
+
+        # Shift+Arrow for resizing
+        self.bind("<Shift-Up>", lambda e: self.resize_selected_region(0, -1))
+        self.bind("<Shift-Down>", lambda e: self.resize_selected_region(0, 1))
+        self.bind("<Shift-Left>", lambda e: self.resize_selected_region(-1, 0))
+        self.bind("<Shift-Right>", lambda e: self.resize_selected_region(1, 0))
+
+        # Tab to cycle through regions
+        self.bind("<Tab>", lambda e: self.cycle_selection(1))
+        self.bind("<Shift-Tab>", lambda e: self.cycle_selection(-1))
 
     def show_welcome(self):
         """Show welcome message on empty canvas"""
         self.source_canvas.create_text(
             400, 300,
-            text="Welcome to Photo Cropper\n\nFile → Open Image to get started",
+            text="Welcome to Photo Cropper\n\nDrag an image file onto the window\nor use toolbar to open",
             font=("Arial", 16),
             fill="white"
         )
 
-    def open_image(self):
-        """Open image file dialog and load image"""
-        file_path = filedialog.askopenfilename(
-            title="Select scanned image",
-            filetypes=[
-                ("JPEG files", "*.jpg *.jpeg"),
-                ("All files", "*.*")
-            ]
-        )
+    def move_selected_region(self, dx, dy):
+        """Move selected region by dx, dy pixels"""
+        region = self.app_state.get_selected_region()
+        if not region or not self.app_state.original_image:
+            return
 
-        if file_path:
-            self.load_image(Path(file_path))
+        img_w, img_h = self.app_state.original_image.size
+
+        # Move region, keeping it within image bounds
+        new_x = max(0, min(img_w - region.width, region.x + dx))
+        new_y = max(0, min(img_h - region.height, region.y + dy))
+
+        region.x = new_x
+        region.y = new_y
+
+        # Refresh display
+        self.sync_selection()
+
+    def resize_selected_region(self, dw, dh):
+        """Resize selected region by dw, dh pixels (anchored at top-left)"""
+        region = self.app_state.get_selected_region()
+        if not region or not self.app_state.original_image:
+            return
+
+        img_w, img_h = self.app_state.original_image.size
+
+        # Resize region, keeping minimum size of 50x50 and within image bounds
+        new_width = max(50, min(img_w - region.x, region.width + dw))
+        new_height = max(50, min(img_h - region.y, region.height + dh))
+
+        region.width = new_width
+        region.height = new_height
+
+        # Refresh display
+        self.sync_selection()
+
+    def cycle_selection(self, direction):
+        """Cycle through regions (direction: 1 for forward, -1 for backward)"""
+        if not self.app_state.photo_regions:
+            return
+
+        # Find current selection index
+        current_idx = -1
+        if self.app_state.selected_region_id:
+            for idx, region in enumerate(self.app_state.photo_regions):
+                if region.region_id == self.app_state.selected_region_id:
+                    current_idx = idx
+                    break
+
+        # Calculate next index (with wrap-around)
+        next_idx = (current_idx + direction) % len(self.app_state.photo_regions)
+
+        # Select next region
+        self.app_state.selected_region_id = self.app_state.photo_regions[next_idx].region_id
+
+        # Refresh display
+        self.sync_selection()
+
+        # Prevent Tab from changing focus to other widgets
+        return "break"
+
+    def show_shortcuts(self):
+        """Show keyboard shortcuts reference"""
+        shortcuts_text = """Keyboard Shortcuts:
+
+Navigation:
+  Tab                 Select next region
+  Shift+Tab           Select previous region
+
+Movement:
+  Arrow keys          Move selected region (1 pixel)
+  Shift+Arrow keys    Resize selected region (1 pixel)
+
+Actions:
+  Delete              Delete selected region
+
+Tip: Hold arrow keys for continuous movement/resizing"""
+
+        messagebox.showinfo("Keyboard Shortcuts", shortcuts_text)
 
     def load_image(self, path: Path):
         """Load image and run detection"""
@@ -1003,11 +1097,6 @@ class PhotoCropperApp(tk.Tk):
             messagebox.showerror("Error Loading Image", str(e))
             import traceback
             traceback.print_exc()
-
-    def add_manual_region(self):
-        """Add manual crop region"""
-        # TODO: Implement manual region drawing
-        messagebox.showinfo("Add Region", "Manual region creation coming soon!")
 
     def show_about(self):
         """Show about dialog"""
