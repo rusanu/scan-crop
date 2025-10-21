@@ -46,6 +46,9 @@ output/
 !docs/*.jpg
 !docs/*.png
 
+# Debug files
+debug_*
+
 # Distribution
 *.exe
 *.spec
