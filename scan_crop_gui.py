@@ -444,12 +444,18 @@ class SourceImageCanvas(tk.Canvas):
                 self.app_state.photo_regions.append(new_region)
                 self.app_state.selected_region_id = new_region.region_id
 
+                # Clear interaction mode BEFORE refreshing
+                self.interaction_mode = InteractionMode.NONE
+                self.drag_start = None
+                self.drag_region_start = None
+
                 # Refresh both panels
                 if self.app:
                     self.app.photo_list.refresh_list()
                     self.app.sync_selection()
 
                 self.refresh()
+                return  # Exit early to avoid clearing mode twice
 
         elif self.interaction_mode != InteractionMode.NONE:
             # Update thumbnails in right panel after drag/resize
@@ -605,17 +611,18 @@ class SourceImageCanvas(tk.Canvas):
 
     def update_cursor(self, mode):
         """Update cursor based on interaction mode"""
+        # Use Windows-compatible cursor names
         cursors = {
             InteractionMode.NONE: "",
             InteractionMode.DRAGGING: "fleur",
-            InteractionMode.RESIZING_NW: "nw-resize",
-            InteractionMode.RESIZING_N: "n-resize",
-            InteractionMode.RESIZING_NE: "ne-resize",
-            InteractionMode.RESIZING_E: "e-resize",
-            InteractionMode.RESIZING_SE: "se-resize",
-            InteractionMode.RESIZING_S: "s-resize",
-            InteractionMode.RESIZING_SW: "sw-resize",
-            InteractionMode.RESIZING_W: "w-resize",
+            InteractionMode.RESIZING_NW: "size_nw_se",
+            InteractionMode.RESIZING_N: "sb_v_double_arrow",
+            InteractionMode.RESIZING_NE: "size_ne_sw",
+            InteractionMode.RESIZING_E: "sb_h_double_arrow",
+            InteractionMode.RESIZING_SE: "size_nw_se",
+            InteractionMode.RESIZING_S: "sb_v_double_arrow",
+            InteractionMode.RESIZING_SW: "size_ne_sw",
+            InteractionMode.RESIZING_W: "sb_h_double_arrow",
         }
         self.config(cursor=cursors.get(mode, ""))
 
