@@ -127,12 +127,13 @@ def detect_photos(pil_image: Image.Image) -> List:
     from dataclasses import dataclass, field
 
     regions = []
-    for idx, (x, y, w, h) in enumerate(bounding_boxes):
+    for idx, (x, y, w, h) in enumerate(bounding_boxes, start=1):
         region = PhotoRegion(
             x=x, y=y, width=w, height=h,
             rotation=0,
             is_manual=False,
-            list_order=idx
+            list_order=idx - 1,
+            name=f"Photo {idx}"  # Set default name immediately
         )
         regions.append(region)
 
@@ -426,8 +427,9 @@ class SourceImageCanvas(tk.Canvas):
 
             # Only create if dimensions are valid (min 50x50)
             if width >= 50 and height >= 50:
-                # Get next list order
+                # Get next list order and photo number
                 max_order = max([r.list_order for r in self.app_state.photo_regions], default=-1)
+                photo_num = len(self.app_state.photo_regions) + 1
 
                 # Create new PhotoRegion
                 new_region = PhotoRegion(
@@ -440,7 +442,8 @@ class SourceImageCanvas(tk.Canvas):
                     contrast=0,
                     denoise=False,
                     is_manual=True,
-                    list_order=max_order + 1
+                    list_order=max_order + 1,
+                    name=f"Photo {photo_num}"  # Set default name
                 )
 
                 # Add to state and select it
@@ -663,7 +666,9 @@ class PhotoPreviewPanel(tk.Frame):
         tk.Label(name_frame, text="Name:", bg="lightgray").pack(side=tk.LEFT, padx=(0, 5))
         self.name_entry = tk.Entry(name_frame)
         self.name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.name_entry.bind("<KeyRelease>", self.on_name_changed)
+        # Update name only on Enter or focus loss (not on every keystroke)
+        self.name_entry.bind("<Return>", self.on_name_changed)
+        self.name_entry.bind("<FocusOut>", self.on_name_changed)
 
         # Preview canvas
         self.preview_canvas = tk.Canvas(self, bg="white", highlightthickness=1)
@@ -677,13 +682,13 @@ class PhotoPreviewPanel(tk.Frame):
         self.refresh()
 
     def on_name_changed(self, event):
-        """Handle name entry change"""
+        """Handle name entry change (on Enter or focus loss)"""
         selected_region = self.app_state.get_selected_region()
         if selected_region:
             selected_region.name = self.name_entry.get()
-            # Refresh left panel to update name display
+            # Refresh left panel to update name display (full refresh to clear old text)
             if self.app:
-                self.app.source_canvas.draw_regions()
+                self.app.source_canvas.refresh()
 
     def refresh(self):
         """Update preview to show currently selected photo"""
@@ -720,13 +725,6 @@ class PhotoPreviewPanel(tk.Frame):
         # Update name entry
         self.name_entry.config(state=tk.NORMAL)
         self.name_entry.delete(0, tk.END)
-        # Set default name if empty
-        if not selected_region.name:
-            try:
-                idx = self.app_state.photo_regions.index(selected_region) + 1
-                selected_region.name = f"Photo {idx}"
-            except ValueError:
-                selected_region.name = "Photo"
         self.name_entry.insert(0, selected_region.name)
 
         # Crop from original image
