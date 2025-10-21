@@ -33,6 +33,7 @@ class InteractionMode(Enum):
     RESIZING_S = 7        # Resizing from south edge
     RESIZING_SW = 8       # Resizing from southwest corner
     RESIZING_W = 9        # Resizing from west edge
+    DRAWING_NEW = 10      # Drawing new region
 
 
 # ============================================================================
@@ -343,13 +344,16 @@ class SourceImageCanvas(tk.Canvas):
         selected = self.app_state.select_region_at_point(img_x, img_y)
 
         if selected:
-            # Start drag operation
+            # Start drag operation (might become DRAGGING if user drags)
             self.interaction_mode = InteractionMode.DRAGGING
             self.drag_start = (img_x, img_y)
             self.drag_region_start = (selected.x, selected.y, selected.width, selected.height)
         else:
-            # Deselect
+            # Click outside any region - deselect for now
+            # Will switch to DRAWING_NEW if user starts dragging (detected in on_mouse_drag)
             self.interaction_mode = InteractionMode.NONE
+            self.drag_start = (img_x, img_y)  # Store start point for potential new region
+            self.drag_region_start = None
             self.app_state.selected_region_id = None
 
         # Refresh display
@@ -361,13 +365,25 @@ class SourceImageCanvas(tk.Canvas):
 
     def on_mouse_drag(self, event):
         """Handle mouse drag"""
-        if self.interaction_mode == InteractionMode.NONE or not self.drag_start:
+        if not self.drag_start:
             return
 
         # Convert to image coordinates
         img_x, img_y = self.canvas_to_image(event.x, event.y)
         dx = img_x - self.drag_start[0]
         dy = img_y - self.drag_start[1]
+
+        # If mode is NONE, check if user is starting to drag outside regions
+        if self.interaction_mode == InteractionMode.NONE:
+            # User started dragging outside any region - enter DRAWING_NEW mode
+            self.interaction_mode = InteractionMode.DRAWING_NEW
+            self.new_region_preview = None  # Will be drawn in draw_regions
+
+        if self.interaction_mode == InteractionMode.DRAWING_NEW:
+            # Draw preview of new region being created
+            # The preview will be rendered in draw_regions()
+            self.refresh()
+            return
 
         selected_region = self.app_state.get_selected_region()
         if not selected_region or not self.drag_region_start:
@@ -389,7 +405,48 @@ class SourceImageCanvas(tk.Canvas):
 
     def on_mouse_up(self, event):
         """Handle mouse release"""
-        if self.interaction_mode != InteractionMode.NONE:
+        if self.interaction_mode == InteractionMode.DRAWING_NEW and self.drag_start:
+            # Create new region
+            img_x, img_y = self.canvas_to_image(event.x, event.y)
+            start_x, start_y = self.drag_start
+
+            # Calculate bounding box (handle dragging in any direction)
+            x = min(start_x, img_x)
+            y = min(start_y, img_y)
+            width = abs(img_x - start_x)
+            height = abs(img_y - start_y)
+
+            # Only create if dimensions are valid (min 50x50)
+            if width >= 50 and height >= 50:
+                # Get next list order
+                max_order = max([r.list_order for r in self.app_state.photo_regions], default=-1)
+
+                # Create new PhotoRegion
+                new_region = PhotoRegion(
+                    x=int(x),
+                    y=int(y),
+                    width=int(width),
+                    height=int(height),
+                    rotation=0,
+                    brightness=0,
+                    contrast=0,
+                    denoise=False,
+                    is_manual=True,
+                    list_order=max_order + 1
+                )
+
+                # Add to state and select it
+                self.app_state.photo_regions.append(new_region)
+                self.app_state.selected_region_id = new_region.region_id
+
+                # Refresh both panels
+                if self.app:
+                    self.app.photo_list.refresh_list()
+                    self.app.sync_selection()
+
+                self.refresh()
+
+        elif self.interaction_mode != InteractionMode.NONE:
             # Update thumbnails in right panel after drag/resize
             if self.app:
                 for widget in self.app.photo_list.photo_widgets:
@@ -443,6 +500,20 @@ class SourceImageCanvas(tk.Canvas):
                 self.create_text(cx, cy, text=f"{region.rotation}°",
                                fill=color, font=("Arial", 12, "bold"),
                                tags=f"region_{region.region_id}")
+
+        # Draw preview rectangle for new region being drawn
+        if self.interaction_mode == InteractionMode.DRAWING_NEW and self.drag_start:
+            # Get current mouse position from the last event
+            canvas_start_x, canvas_start_y = self.image_to_canvas(self.drag_start[0], self.drag_start[1])
+
+            # Get current cursor position
+            mouse_x = self.winfo_pointerx() - self.winfo_rootx()
+            mouse_y = self.winfo_pointery() - self.winfo_rooty()
+
+            # Draw dashed preview rectangle
+            self.create_rectangle(canvas_start_x, canvas_start_y, mouse_x, mouse_y,
+                                outline="blue", width=2, dash=(5, 5),
+                                tags="preview_region")
 
     def draw_resize_handles(self, x1, y1, x2, y2):
         """Draw 8 resize handles on selected region"""
@@ -746,13 +817,59 @@ class PhotoListPanel(tk.Frame):
             self.photo_widgets.append(widget)
 
     def export_all(self):
-        """Export all photos"""
+        """Export all photos to selected directory"""
         if not self.app_state.photo_regions:
             messagebox.showwarning("No Photos", "No photos to export.")
             return
 
-        # TODO: Implement export functionality
-        messagebox.showinfo("Export", "Export functionality coming soon!")
+        # Ask user for output directory
+        output_dir = filedialog.askdirectory(
+            title="Select Output Directory",
+            initialdir=self.app_state.output_directory
+        )
+
+        if not output_dir:
+            return  # User cancelled
+
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        # Update default output directory
+        self.app_state.output_directory = output_path
+
+        # Get base name from source image
+        if self.app_state.image_path:
+            base_name = self.app_state.image_path.stem
+        else:
+            base_name = "photo"
+
+        # Export each region
+        exported_count = 0
+        for idx, region in enumerate(self.app_state.photo_regions, start=1):
+            try:
+                # Crop from original
+                cropped = self.app_state.original_image.crop(region.to_bbox())
+
+                # Apply rotation
+                if region.rotation != 0:
+                    cropped = cropped.rotate(-region.rotation, expand=True)
+
+                # Generate filename
+                filename = f"{base_name}_photo_{idx:02d}.jpg"
+                output_file = output_path / filename
+
+                # Save with high quality
+                cropped.save(output_file, "JPEG", quality=95)
+                exported_count += 1
+
+            except Exception as e:
+                messagebox.showerror("Export Error",
+                                   f"Failed to export photo {idx}: {str(e)}")
+                return
+
+        # Show success message
+        messagebox.showinfo("Export Complete",
+                          f"Successfully exported {exported_count} photo(s) to:\n{output_path}")
 
 
 # ============================================================================
