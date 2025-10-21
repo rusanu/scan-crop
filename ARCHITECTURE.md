@@ -1,12 +1,14 @@
 # scan-crop GUI Application Architecture
 
-**Version**: 1.0
+**Version**: 2.0
 **Date**: 2025-10-21
 **Framework**: tkinter
 
 ## Overview
 
 This document defines the architecture for the scan-crop GUI application, transforming the CLI tool into an interactive photo cropper with preview, adjustable crops, rotation controls, and export functionality.
+
+**UX Design**: Two-panel layout with source image (left) and photo list with live previews (right).
 
 ---
 
@@ -20,20 +22,29 @@ Represents a single detected or manually-created photo crop region.
 @dataclass
 class PhotoRegion:
     """
-    Represents a crop region with position, size, and rotation.
+    Represents a crop region with position, size, and processing parameters.
     All coordinates are in IMAGE space (original image pixels).
     """
+    # Crop geometry (image space)
     x: int              # Top-left X coordinate (image pixels)
     y: int              # Top-left Y coordinate (image pixels)
     width: int          # Region width (image pixels)
     height: int         # Region height (image pixels)
-    rotation: int = 0   # Rotation angle: 0, 90, 180, 270
+
+    # Processing parameters (applied during preview and export)
+    rotation: int = 0        # Rotation angle: 0, 90, 180, 270
+    brightness: int = 0      # -100 to +100 (future enhancement)
+    contrast: int = 0        # -100 to +100 (future enhancement)
+    denoise: bool = False    # Noise reduction toggle (future enhancement)
+
+    # Metadata
     is_manual: bool = False  # True if user-created, False if auto-detected
     region_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    list_order: int = 0      # Display order in right panel (for export sequencing)
 
     def to_bbox(self):
-        """Returns (x, y, w, h) tuple"""
-        return (self.x, self.y, self.width, self.height)
+        """Returns (x, y, w, h) tuple for PIL crop"""
+        return (self.x, self.y, self.x + self.width, self.y + self.height)
 
     def contains_point(self, px, py):
         """Check if point is inside region (used for selection)"""
@@ -90,42 +101,84 @@ class ApplicationState:
 
 ## Component Architecture
 
+### Layout Overview
+
+```
++------------------------------------------------------------------+
+| PhotoCropperApp (Main Window)                                     |
++------------------------------------------------------------------+
+| Menu Bar: File | Edit | Help                                      |
++------------------------------------------------------------------+
+| PanedWindow (Horizontal Split)                                    |
+|                                    |                              |
+|  LEFT PANEL                        |  RIGHT PANEL                 |
+|  SourceImageCanvas                 |  PhotoListPanel              |
+|  (Original scan + crop overlays)   |  (Scrollable photo cards)    |
+|                                    |                              |
++------------------------------------------------------------------+
+```
+
 ### 1. Main Application (PhotoCropperApp)
 
 **Responsibilities:**
-- Create main window and menu bar
-- Coordinate between components
-- Handle high-level application lifecycle
+- Create main window with two-panel layout
+- Setup menu bar (File/Edit/Help)
+- Coordinate between left and right panels
+- Handle application lifecycle and file operations
+
+**Layout Structure:**
+```python
+class PhotoCropperApp(tk.Tk):
+    def __init__(self):
+        # Main horizontal split
+        self.paned_window = tk.PanedWindow(orient=tk.HORIZONTAL)
+
+        # LEFT PANEL: Source image with crop overlays
+        self.left_frame = tk.Frame(self.paned_window)
+        self.source_canvas = SourceImageCanvas(self.left_frame, self.app_state)
+
+        # RIGHT PANEL: Photo list with previews
+        self.right_frame = tk.Frame(self.paned_window)
+        self.photo_list = PhotoListPanel(self.right_frame, self.app_state)
+
+        # Add to paned window (60/40 split)
+        self.paned_window.add(self.left_frame, width=600)
+        self.paned_window.add(self.right_frame, width=400)
+```
 
 **Key Methods:**
-- `__init__()` - Initialize UI and components
-- `setup_menu()` - Create File/Edit/Help menus
-- `run()` - Start main event loop
+- `setup_menu()` - File (Open, Export), Edit (Add Region, Delete), Help
+- `load_image(path)` - Load scan, run detection, update both panels
+- `export_photos()` - Save all photos with transformations applied
+- `sync_selection(region_id)` - Sync selection between left/right panels
 
 ---
 
-### 2. ImageCanvas (Custom tk.Canvas)
+### 2. SourceImageCanvas (Left Panel - Custom tk.Canvas)
 
 **Responsibilities:**
-- Display scaled image
-- Render photo region overlays
-- Handle all mouse interactions
-- Manage coordinate transformations
+- Display source scanned image (scaled to fit)
+- Render crop region rectangles as overlays
+- Handle mouse interactions for region manipulation
+- Manage coordinate transformations (image space ↔ canvas space)
+- Show selection highlights and resize handles
 
 **State:**
 - `app_state: ApplicationState` - Reference to global state
 - `scale_factor: float` - Current image scaling
 - `image_offset: (int, int)` - Offset for centering image
+- `interaction_mode: InteractionMode` - Current mouse operation
 
 **Key Methods:**
-- `load_and_display_image(image_path)` - Load image and auto-detect regions
-- `refresh()` - Redraw canvas (image + regions)
+- `display_image()` - Render source image scaled to canvas
+- `refresh()` - Redraw entire canvas (image + all region overlays)
+- `draw_regions()` - Draw all crop region rectangles
+- `draw_selection_handles()` - Draw resize handles for selected region
 - `image_to_canvas(x, y)` - Convert image coords → canvas coords
 - `canvas_to_image(x, y)` - Convert canvas coords → image coords
-- `draw_regions()` - Render all PhotoRegion overlays
-- `on_mouse_down(event)` - Handle click (selection/drag start)
-- `on_mouse_drag(event)` - Handle drag (move/resize)
-- `on_mouse_up(event)` - Handle release (finalize edit)
+- `on_mouse_down(event)` - Handle click (select/start drag/resize)
+- `on_mouse_drag(event)` - Handle drag (move/resize region)
+- `on_mouse_up(event)` - Finalize operation, notify right panel to update
 
 **Mouse Interaction States:**
 ```python
@@ -141,7 +194,136 @@ class InteractionMode(Enum):
 
 ---
 
-### 3. DetectionEngine (Static Module)
+### 3. PhotoListPanel (Right Panel - Scrollable Container)
+
+**Responsibilities:**
+- Display scrollable list of photo cards (one per PhotoRegion)
+- Manage PhotoItemWidget instances
+- Handle reordering of photos
+- Provide "Export All" button at bottom
+
+**Layout:**
+```python
+class PhotoListPanel(tk.Frame):
+    def __init__(self, parent, app_state):
+        # Scrollable canvas for photo cards
+        self.canvas = tk.Canvas(self)
+        self.scrollbar = tk.Scrollbar(self, command=self.canvas.yview)
+        self.scrollable_frame = tk.Frame(self.canvas)
+
+        # Container for PhotoItemWidgets
+        self.photo_widgets = []  # List of PhotoItemWidget instances
+
+        # Export button at bottom
+        self.export_btn = tk.Button(self, text="Export All Photos...",
+                                    command=self.export_all)
+```
+
+**Key Methods:**
+- `refresh()` - Rebuild list of photo cards from app_state.photo_regions
+- `add_photo_card(region)` - Create PhotoItemWidget for region
+- `remove_photo_card(region_id)` - Delete PhotoItemWidget
+- `move_photo_up(region_id)` - Reorder region up in list
+- `move_photo_down(region_id)` - Reorder region down in list
+- `on_card_click(region_id)` - Sync selection with left panel
+
+---
+
+### 4. PhotoItemWidget (Individual Photo Card)
+
+**Responsibilities:**
+- Display thumbnail preview of one cropped photo
+- Show rotation and enhancement controls
+- Apply transformations to thumbnail in real-time
+- Handle user interactions (rotate, delete, reorder)
+
+**Layout:**
+```
++------------------------+
+| Photo 1                |
+|  [Thumbnail 200x200]   |
+|  Rotation: 0°          |
+|  [⟲] [⟳]              |
+|  Brightness: [slider]  |  (future)
+|  Contrast: [slider]    |  (future)
+|  [Delete] [↑] [↓]      |
++------------------------+
+```
+
+**Implementation:**
+```python
+class PhotoItemWidget(tk.Frame):
+    def __init__(self, parent, region, app_state, photo_list_panel):
+        self.region = region
+        self.app_state = app_state
+        self.photo_list = photo_list_panel
+
+        # Thumbnail canvas
+        self.thumbnail_canvas = tk.Canvas(self, width=200, height=200, bg="white")
+
+        # Controls
+        self.rotation_label = tk.Label(self, text=f"Rotation: {region.rotation}°")
+        self.rotate_ccw_btn = tk.Button(self, text="⟲", command=self.rotate_ccw)
+        self.rotate_cw_btn = tk.Button(self, text="⟳", command=self.rotate_cw)
+
+        # Future enhancement controls (initially hidden or disabled)
+        self.brightness_slider = tk.Scale(self, from_=-100, to=100,
+                                          orient=tk.HORIZONTAL, label="Brightness")
+        self.contrast_slider = tk.Scale(self, from_=-100, to=100,
+                                        orient=tk.HORIZONTAL, label="Contrast")
+
+        # Action buttons
+        self.delete_btn = tk.Button(self, text="Delete", command=self.delete_region)
+        self.move_up_btn = tk.Button(self, text="↑", command=self.move_up)
+        self.move_down_btn = tk.Button(self, text="↓", command=self.move_down)
+
+    def update_thumbnail(self):
+        """
+        Render thumbnail with current transformations.
+        1. Crop from original image
+        2. Apply rotation
+        3. Apply brightness/contrast (future)
+        4. Scale to thumbnail size
+        5. Display in canvas
+        """
+        # Crop from original
+        cropped = self.app_state.original_image.crop(self.region.to_bbox())
+
+        # Apply rotation (PIL handles expand=True automatically)
+        if self.region.rotation != 0:
+            cropped = cropped.rotate(-self.region.rotation, expand=True)
+
+        # Future: Apply enhancements
+        # if self.region.brightness != 0:
+        #     cropped = ImageEnhance.Brightness(cropped).enhance(1 + self.region.brightness/100)
+
+        # Create thumbnail (maintains aspect ratio)
+        cropped.thumbnail((200, 200), Image.Resampling.LANCZOS)
+
+        # Convert to PhotoImage and display
+        self.photo_image = ImageTk.PhotoImage(cropped)
+        self.thumbnail_canvas.delete("all")
+        self.thumbnail_canvas.create_image(100, 100, image=self.photo_image)
+
+    def rotate_cw(self):
+        """Rotate 90° clockwise"""
+        self.region.rotation = (self.region.rotation + 90) % 360
+        self.rotation_label.config(text=f"Rotation: {self.region.rotation}°")
+        self.update_thumbnail()
+        # Notify left panel to update rotation indicator
+        self.photo_list.app.source_canvas.refresh()
+
+    def rotate_ccw(self):
+        """Rotate 90° counter-clockwise"""
+        self.region.rotation = (self.region.rotation - 90) % 360
+        self.rotation_label.config(text=f"Rotation: {self.region.rotation}°")
+        self.update_thumbnail()
+        self.photo_list.app.source_canvas.refresh()
+```
+
+---
+
+### 5. DetectionEngine (Static Module)
 
 **Responsibilities:**
 - Run OpenCV contour detection (existing algorithm)
@@ -157,7 +339,7 @@ def detect_photos(image: Image.Image) -> List[PhotoRegion]:
     Implementation:
     1. Convert PIL → OpenCV (BGR)
     2. Run find_photo_contours() (existing code)
-    3. Convert bounding boxes → PhotoRegion(is_manual=False)
+    3. Convert bounding boxes → PhotoRegion(is_manual=False, list_order=idx)
     4. Return list
     """
 ```
@@ -166,25 +348,25 @@ def detect_photos(image: Image.Image) -> List[PhotoRegion]:
 
 ---
 
-### 4. RegionEditor (UI Component)
+### 6. RegionEditor (Helper Functions)
 
 **Responsibilities:**
-- Render selection handles on selected region
+- Render selection handles on selected region (left panel)
 - Calculate resize handle positions
 - Determine interaction mode from mouse position
 
-**Key Methods:**
+**Key Functions:**
 ```python
-def draw_selection_handles(canvas, region, scale):
+def draw_selection_handles(canvas, region, scale, offset):
     """
     Draw 8 resize handles (corners + midpoints) for selected region.
-    Handles are small rectangles (e.g., 8x8 pixels).
+    Handles are small rectangles (e.g., 8x8 pixels) in canvas space.
     """
 
-def get_interaction_mode(mouse_x, mouse_y, region, scale):
+def get_interaction_mode(mouse_x, mouse_y, region, scale, offset):
     """
     Determine what interaction is happening based on mouse position:
-    - On corner handle? → RESIZING_XX
+    - On corner/edge handle? → RESIZING_XX
     - Inside region? → DRAGGING
     - Outside? → NONE
 
@@ -192,67 +374,50 @@ def get_interaction_mode(mouse_x, mouse_y, region, scale):
     """
 ```
 
----
-
-### 5. RotationController (UI Component)
-
-**Responsibilities:**
-- Provide rotation UI for selected region
-- Update PhotoRegion.rotation state
-
-**UI Options (Choose One):**
-
-**Option A: Toolbar Buttons**
-```python
-# Add buttons to toolbar when region selected
-rotate_cw_btn = tk.Button(toolbar, text="⟳ 90°", command=self.rotate_cw)
-rotate_ccw_btn = tk.Button(toolbar, text="⟲ 90°", command=self.rotate_ccw)
-```
-
-**Option B: Keyboard Shortcuts** (Preferred - simpler UI)
-```python
-# Bind keys globally
-root.bind("r", lambda e: self.rotate_selected_region(90))
-root.bind("R", lambda e: self.rotate_selected_region(-90))  # Shift+R
-```
-
-**Rotation Logic:**
-```python
-def rotate_selected_region(angle_delta):
-    """
-    Rotate selected region by angle_delta (-90 or 90).
-    Clamp result to [0, 90, 180, 270].
-    """
-    region = app_state.get_selected_region()
-    if region:
-        region.rotation = (region.rotation + angle_delta) % 360
-        canvas.refresh()
-```
+*Note: These are utility functions used by SourceImageCanvas, not a separate component.*
 
 ---
 
-### 6. Exporter (Static Module)
+### 7. Exporter (Static Module)
 
 **Responsibilities:**
 - Save all photo regions to files
-- Apply crops and rotations during export
+- Apply crops, rotations, and enhancements during export
+- Sort regions by list_order before export
 
 **Key Functions:**
 ```python
-def export_photos(image: Image.Image, regions: List[PhotoRegion], output_dir: Path):
+def export_photos(image: Image.Image, regions: List[PhotoRegion], output_dir: Path, base_name: str):
     """
     Export all photo regions to output_dir.
 
-    For each region:
-    1. Crop from original image: image.crop((x, y, x+w, y+h))
-    2. Apply rotation if needed: cropped.rotate(region.rotation, expand=True)
-    3. Save as JPEG: cropped.save(path, "JPEG", quality=95)
+    Process:
+    1. Sort regions by list_order (respects user's reordering in right panel)
+    2. For each region:
+       a. Crop from original image: image.crop(region.to_bbox())
+       b. Apply rotation if needed: cropped.rotate(-region.rotation, expand=True)
+       c. Apply brightness/contrast if set (future)
+       d. Apply denoise if enabled (future)
+       e. Save as JPEG: cropped.save(path, "JPEG", quality=95)
 
-    Filename format: {original_stem}_photo_{idx:02d}.jpg
+    Filename format: {base_name}_photo_{idx:02d}.jpg
+    Returns: List of saved file paths
+    """
+
+def apply_enhancements(image: Image.Image, region: PhotoRegion) -> Image.Image:
+    """
+    Apply enhancement parameters to image (future enhancement).
+
+    Parameters:
+    - brightness: -100 to +100
+    - contrast: -100 to +100
+    - denoise: bool
+
+    Uses PIL ImageEnhance and OpenCV for processing.
     """
 ```
 
-*Note: Reuses PIL rotation and save logic. PIL.Image.rotate() handles rotation correctly.*
+*Note: Rotation uses PIL.Image.rotate() with negative angle because PIL rotates counter-clockwise by default.*
 
 ---
 
@@ -367,42 +532,87 @@ User runs scan_crop_gui.py
 User: File → Open Image
   → Open file dialog
   → Load image into ApplicationState.original_image (PIL)
-  → ImageCanvas.load_and_display_image()
-    → Run detect_photos() → List[PhotoRegion]
-    → Store regions in ApplicationState
-    → Calculate scale and offset
-    → Refresh canvas (draw image + regions)
+  → Run detect_photos() → List[PhotoRegion]
+  → Store regions in ApplicationState (with list_order = 0, 1, 2, ...)
+  → LEFT PANEL: SourceImageCanvas displays image + region overlays
+  → RIGHT PANEL: PhotoListPanel creates PhotoItemWidget for each region
+    → Each widget renders thumbnail with current transformations
 ```
 
-### 3. Mouse Interaction: Move Region
+### 3. Left Panel Interaction: Adjust Crop Region
 
 ```
-Mouse Down on region
-  → canvas_to_image() to get image coordinates
-  → app_state.select_region_at_point(x, y)
-  → Store drag_start position
-  → Refresh (show selection handles)
-
-Mouse Drag
-  → Calculate delta: (current - drag_start)
-  → Update selected_region.x, .y (in image space)
-  → Refresh canvas
-
-Mouse Up
-  → Clear drag_start
-  → Refresh (finalize)
+User drags corner of region on LEFT PANEL:
+  → Mouse Down on region corner/edge
+    → Determine interaction mode (RESIZING_NW/NE/SE/SW)
+    → Store drag_start position
+  → Mouse Drag
+    → Calculate new region dimensions (in image space)
+    → Update PhotoRegion.x, .y, .width, .height
+    → Refresh left canvas (show updated rectangle)
+  → Mouse Up
+    → Finalize resize
+    → Notify RIGHT PANEL: corresponding PhotoItemWidget.update_thumbnail()
+    → Right panel shows updated crop
 ```
 
-### 4. Export Workflow
+### 4. Right Panel Interaction: Rotate Photo
 
 ```
-User: File → Save Photos
+User clicks ⟳ button on Photo 2 card (RIGHT PANEL):
+  → PhotoItemWidget.rotate_cw()
+    → Update region.rotation = (rotation + 90) % 360
+    → Update rotation label: "Rotation: 90°"
+    → Call update_thumbnail()
+      → Crop from original image
+      → Apply rotation (PIL.rotate())
+      → Render rotated thumbnail in card
+    → Notify LEFT PANEL: SourceImageCanvas.refresh()
+      → (Optional) Show rotation indicator on region overlay
+```
+
+### 5. Selection Sync Between Panels
+
+```
+SCENARIO A: User clicks region on LEFT PANEL
+  → SourceImageCanvas.on_mouse_down()
+    → app_state.select_region_at_point(x, y)
+    → app_state.selected_region_id = clicked_region.id
+    → LEFT: Draw selection handles
+    → RIGHT: Highlight corresponding PhotoItemWidget (border/background change)
+
+SCENARIO B: User clicks photo card on RIGHT PANEL
+  → PhotoItemWidget.on_click()
+    → app_state.selected_region_id = self.region.region_id
+    → RIGHT: Highlight this card
+    → LEFT: Draw selection handles on corresponding region
+```
+
+### 6. Reorder Photos (Right Panel)
+
+```
+User clicks [↓] on Photo 2 card:
+  → PhotoItemWidget.move_down()
+    → Swap region.list_order with Photo 3
+    → PhotoListPanel.refresh()
+      → Rebuild photo card list in new order
+  → LEFT PANEL: Regions stay in same positions (not affected)
+  → Export: Will save photos in new order (photo_01.jpg = old Photo 3, etc.)
+```
+
+### 7. Export Workflow
+
+```
+User: Clicks "Export All Photos..." button (RIGHT PANEL)
   → Open directory selection dialog
   → Call export_photos(image, regions, output_dir)
-    → For each PhotoRegion:
+    → Sort regions by list_order (respects user reordering)
+    → For each PhotoRegion (in order):
       → Crop from original image
-      → Rotate if rotation != 0
+      → Apply rotation if rotation != 0
+      → Apply brightness/contrast if set (future)
       → Save as JPEG (95% quality)
+    → Return list of saved paths
   → Show success message: "Saved N photos to {dir}"
 ```
 
@@ -410,38 +620,68 @@ User: File → Save Photos
 
 ## Design Decisions
 
-### 1. Why Single-File Architecture?
+### 1. Why Two-Panel Layout (LEFT=Source, RIGHT=Photo List)?
+
+**Rationale:**
+- **Separation of concerns**: Left = adjust crop geometry, Right = process individual photos
+- **Live preview**: Users see rotation/enhancements immediately in thumbnails
+- **No overlap issues**: Rotation happens in isolated thumbnails, not on main canvas
+- **Natural workflow**: Crop → Process → Export
+- **Extensibility**: Right panel can add more enhancement controls without cluttering
+
+**Alternatives Considered:**
+- **Modal dialog**: Requires extra click, interrupts workflow
+- **In-place rotation**: Would cause bounding boxes to overlap on left canvas
+- **Export-only**: No visual confirmation before saving
+
+**Benefits for Vintage Photos:**
+Right panel becomes processing workspace for per-photo adjustments (rotation, brightness, contrast, denoise).
+
+---
+
+### 2. Why Single-File Architecture?
 
 **Rationale:** Keep deployment simple for Windows users. Single `.py` file → single `.exe` file.
 
-**Trade-off:** Less modular, but acceptable for ~500-800 lines of code.
+**Trade-off:** Less modular, but acceptable for ~800-1200 lines of code (increased from original estimate due to two-panel design).
 
-### 2. Why Store Coordinates in Image Space?
+---
+
+### 3. Why Store Coordinates in Image Space?
 
 **Rationale:**
 - Image coordinates are stable (don't change with window resize)
 - Export operations use original image dimensions
 - Canvas scaling is display-only concern
+- Thumbnails crop from original image, not scaled canvas
 
 **Alternative (rejected):** Store in canvas space → would need to recalculate all regions on resize.
 
-### 3. Why PIL for Image Operations?
+---
+
+### 4. Why PIL for Image Operations?
 
 **Rationale:**
 - Already using PIL for save (quality control)
 - PIL.Image.rotate() is simpler than cv2.rotate()
+- PIL.ImageEnhance for brightness/contrast (future)
 - OpenCV only needed for detection (which works with numpy arrays)
 
-### 4. Rotation: Preview vs Export-Only?
+---
 
-**Decision: Export-only** (simpler implementation)
+### 5. Why Live Thumbnail Previews (vs Export-Only)?
+
+**Decision: Live previews in right panel**
 
 **Rationale:**
-- Rotating canvas preview requires complex rendering
-- Most users care about final output, not preview accuracy
-- Can add preview later if needed (future enhancement)
+- User sees final result before export
+- Critical for rotation (users need to know which way is "up")
+- Enables experimentation with brightness/contrast
+- Better UX for non-technical users
 
-**Implementation:** Show rotation angle as text overlay on region (e.g., "90°")
+**Implementation:** Each PhotoItemWidget renders thumbnail with all transformations applied (crop → rotate → enhance).
+
+**Performance:** PIL thumbnail operations fast enough for interactive use (~50-100ms per photo).
 
 ---
 
