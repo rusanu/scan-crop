@@ -39,7 +39,7 @@ jobs:
           echo "IS_RELEASE=true" >> $env:GITHUB_OUTPUT
           # Update version.py with tag version
           $content = @"
-        ```"""Version information for scan-crop"""
+        """Version information for scan-crop"""
 
         __version__ = "$version"
         __version_info__ = tuple(map(int, "$version".split('.')))
@@ -52,7 +52,7 @@ jobs:
           echo "IS_RELEASE=false" >> $env:GITHUB_OUTPUT
           # Update version.py with dev version
           $content = @"
-        ```"""Version information for scan-crop"""
+        """Version information for scan-crop"""
 
         __version__ = "$version"
         __version_info__ = (0, 0, 0)
