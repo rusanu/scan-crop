@@ -5,7 +5,7 @@ Extracts individual photos from scans with adjustable crops and rotation control
 """
 
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, colorchooser
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List
@@ -187,7 +187,8 @@ class PhotoRegion:
 @dataclass
 class AppConfig:
     """Application configuration/preferences"""
-    overlay_color: str = "green"  # Color for region overlays: "green" or "red"
+    overlay_color_selected: str = "#00FF00"  # Color for selected region overlays (hex)
+    overlay_color_unselected: str = "#FF0000"  # Color for unselected region overlays (hex)
     export_format: str = "auto"   # Export format: "auto" (same as source), "jpeg", "png"
     filename_include_source: bool = True  # Include source filename in exports
 
@@ -510,13 +511,14 @@ class SourceImageCanvas(tk.Canvas):
 
             # Determine color based on preferences and selection state
             is_selected = (region.region_id == self.app_state.selected_region_id)
-            if self.app_state.config.overlay_color == "green":
-                # Green for selected, red for unselected
-                color = "green" if is_selected else "red"
+            if is_selected:
+                # Use configured color for selected regions
+                color = self.app_state.config.overlay_color_selected
+                width = 3
             else:
-                # Red for selected, green for unselected
-                color = "red" if is_selected else "green"
-            width = 3 if is_selected else 2
+                # Use configured color for unselected regions
+                color = self.app_state.config.overlay_color_unselected
+                width = 2
 
             # Draw rectangle
             self.create_rectangle(x1, y1, x2, y2,
@@ -802,8 +804,8 @@ class PreferencesDialog(tk.Toplevel):
         # Create UI
         self.create_widgets()
 
-        # Center on parent
-        self.geometry("400x250")
+        # Auto-size to fit content, then disable resizing
+        self.update_idletasks()
         self.resizable(False, False)
 
     def create_widgets(self):
@@ -812,54 +814,158 @@ class PreferencesDialog(tk.Toplevel):
         main_frame = tk.Frame(self, padx=20, pady=20)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Overlay Color section
-        tk.Label(main_frame, text="Region Overlay Color:", font=("Arial", 10, "bold")).grid(
+        # Selected Region Overlay Color
+        tk.Label(main_frame, text="Selected Region Color:", font=("Arial", 10, "bold")).grid(
             row=0, column=0, sticky=tk.W, pady=(0, 5))
 
-        self.overlay_var = tk.StringVar(value=self.config.overlay_color)
-        tk.Radiobutton(main_frame, text="Green (selected) / Red (unselected)",
-                      variable=self.overlay_var, value="green").grid(
-            row=1, column=0, sticky=tk.W, padx=20)
-        tk.Radiobutton(main_frame, text="Red (selected) / Green (unselected)",
-                      variable=self.overlay_var, value="red").grid(
-            row=2, column=0, sticky=tk.W, padx=20)
+        selected_frame = tk.Frame(main_frame)
+        selected_frame.grid(row=1, column=0, sticky=tk.W, padx=20, pady=(0, 5))
+
+        self.selected_preview = tk.Canvas(selected_frame, width=40, height=30,
+                                         bg=self.config.overlay_color_selected,
+                                         highlightthickness=1, highlightbackground="black")
+        self.selected_preview.pack(side=tk.LEFT, padx=(0, 10))
+
+        tk.Button(selected_frame, text="Choose Color...",
+                 command=lambda: self.choose_color("selected")).pack(side=tk.LEFT)
+
+        tk.Label(selected_frame, text="Hex:").pack(side=tk.LEFT, padx=(10, 5))
+        self.selected_entry = tk.Entry(selected_frame, width=10)
+        self.selected_entry.insert(0, self.config.overlay_color_selected)
+        self.selected_entry.pack(side=tk.LEFT)
+        self.selected_entry.bind("<Return>", lambda e: self.update_color_from_entry("selected"))
+        self.selected_entry.bind("<FocusOut>", lambda e: self.update_color_from_entry("selected"))
+
+        # Unselected Region Overlay Color
+        tk.Label(main_frame, text="Unselected Region Color:", font=("Arial", 10, "bold")).grid(
+            row=2, column=0, sticky=tk.W, pady=(10, 5))
+
+        unselected_frame = tk.Frame(main_frame)
+        unselected_frame.grid(row=3, column=0, sticky=tk.W, padx=20, pady=(0, 5))
+
+        self.unselected_preview = tk.Canvas(unselected_frame, width=40, height=30,
+                                           bg=self.config.overlay_color_unselected,
+                                           highlightthickness=1, highlightbackground="black")
+        self.unselected_preview.pack(side=tk.LEFT, padx=(0, 10))
+
+        tk.Button(unselected_frame, text="Choose Color...",
+                 command=lambda: self.choose_color("unselected")).pack(side=tk.LEFT)
+
+        tk.Label(unselected_frame, text="Hex:").pack(side=tk.LEFT, padx=(10, 5))
+        self.unselected_entry = tk.Entry(unselected_frame, width=10)
+        self.unselected_entry.insert(0, self.config.overlay_color_unselected)
+        self.unselected_entry.pack(side=tk.LEFT)
+        self.unselected_entry.bind("<Return>", lambda e: self.update_color_from_entry("unselected"))
+        self.unselected_entry.bind("<FocusOut>", lambda e: self.update_color_from_entry("unselected"))
 
         # Export Format section
         tk.Label(main_frame, text="Export Format:", font=("Arial", 10, "bold")).grid(
-            row=3, column=0, sticky=tk.W, pady=(15, 5))
+            row=4, column=0, sticky=tk.W, pady=(15, 5))
 
         self.format_var = tk.StringVar(value=self.config.export_format)
         tk.Radiobutton(main_frame, text="Auto (same as source image)",
                       variable=self.format_var, value="auto").grid(
-            row=4, column=0, sticky=tk.W, padx=20)
+            row=5, column=0, sticky=tk.W, padx=20)
         tk.Radiobutton(main_frame, text="Always JPEG",
                       variable=self.format_var, value="jpeg").grid(
-            row=5, column=0, sticky=tk.W, padx=20)
+            row=6, column=0, sticky=tk.W, padx=20)
         tk.Radiobutton(main_frame, text="Always PNG",
                       variable=self.format_var, value="png").grid(
-            row=6, column=0, sticky=tk.W, padx=20)
+            row=7, column=0, sticky=tk.W, padx=20)
+        tk.Radiobutton(main_frame, text="Always WebP",
+                      variable=self.format_var, value="webp").grid(
+            row=8, column=0, sticky=tk.W, padx=20)
 
         # Filename Structure section
         tk.Label(main_frame, text="Export Filename:", font=("Arial", 10, "bold")).grid(
-            row=7, column=0, sticky=tk.W, pady=(15, 5))
+            row=9, column=0, sticky=tk.W, pady=(15, 5))
 
         self.filename_var = tk.BooleanVar(value=self.config.filename_include_source)
         tk.Checkbutton(main_frame, text="Include source filename (e.g., scan1-photo01.jpg)",
                       variable=self.filename_var).grid(
-            row=8, column=0, sticky=tk.W, padx=20)
+            row=10, column=0, sticky=tk.W, padx=20)
 
         # Buttons
         button_frame = tk.Frame(main_frame)
-        button_frame.grid(row=9, column=0, pady=(20, 0))
+        button_frame.grid(row=11, column=0, pady=(20, 0))
 
         tk.Button(button_frame, text="OK", command=self.on_ok, width=10).pack(
             side=tk.LEFT, padx=5)
         tk.Button(button_frame, text="Cancel", command=self.on_cancel, width=10).pack(
             side=tk.LEFT, padx=5)
 
+    def rgb_to_hex(self, rgb_tuple):
+        """Convert RGB tuple to hex string"""
+        return '#{:02x}{:02x}{:02x}'.format(int(rgb_tuple[0]), int(rgb_tuple[1]), int(rgb_tuple[2]))
+
+    def color_name_to_hex(self, color):
+        """Convert color name to hex, or return hex if already hex"""
+        if color.startswith('#'):
+            return color
+        # Try to get RGB values from tk
+        try:
+            root = self.winfo_toplevel()
+            rgb = root.winfo_rgb(color)
+            # winfo_rgb returns 16-bit values, convert to 8-bit
+            return self.rgb_to_hex((rgb[0]//256, rgb[1]//256, rgb[2]//256))
+        except:
+            return color  # Return as-is if conversion fails
+
+    def choose_color(self, which):
+        """Open color picker dialog"""
+        entry = self.selected_entry if which == "selected" else self.unselected_entry
+        preview = self.selected_preview if which == "selected" else self.unselected_preview
+
+        current_color = entry.get()
+        color = colorchooser.askcolor(
+            color=current_color,
+            title=f"Choose {which.title()} Region Color"
+        )
+        if color[1]:  # color[1] is the hex string
+            entry.delete(0, tk.END)
+            entry.insert(0, color[1])
+            preview.config(bg=color[1])
+
+    def update_color_from_entry(self, which):
+        """Update preview when hex entry changes"""
+        entry = self.selected_entry if which == "selected" else self.unselected_entry
+        preview = self.selected_preview if which == "selected" else self.unselected_preview
+        default = self.config.overlay_color_selected if which == "selected" else self.config.overlay_color_unselected
+
+        try:
+            color = entry.get()
+            # Convert color name to hex if needed
+            hex_color = self.color_name_to_hex(color)
+            # Validate it's a valid color by trying to set it
+            preview.config(bg=hex_color)
+            # Update entry with hex version
+            if hex_color != color:
+                entry.delete(0, tk.END)
+                entry.insert(0, hex_color)
+        except tk.TclError:
+            # Invalid color, revert to default
+            entry.delete(0, tk.END)
+            entry.insert(0, default)
+
     def on_ok(self):
         """Save preferences and close"""
-        self.config.overlay_color = self.overlay_var.get()
+        # Get colors from entry fields and convert to hex
+        try:
+            selected_color = self.selected_entry.get()
+            selected_hex = self.color_name_to_hex(selected_color)
+            self.selected_preview.config(bg=selected_hex)
+            self.config.overlay_color_selected = selected_hex
+        except tk.TclError:
+            pass
+
+        try:
+            unselected_color = self.unselected_entry.get()
+            unselected_hex = self.color_name_to_hex(unselected_color)
+            self.unselected_preview.config(bg=unselected_hex)
+            self.config.overlay_color_unselected = unselected_hex
+        except tk.TclError:
+            pass
+
         self.config.export_format = self.format_var.get()
         self.config.filename_include_source = self.filename_var.get()
         self.result = True
@@ -1052,6 +1158,8 @@ class PhotoCropperApp(tk.Tk):
             format_name = "JPEG"
         elif self.app_state.config.export_format == "png":
             format_name = "PNG"
+        elif self.app_state.config.export_format == "webp":
+            format_name = "WEBP"
         else:
             format_name = "JPEG"  # Default fallback
 
