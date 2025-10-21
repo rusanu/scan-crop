@@ -391,30 +391,47 @@ class PhotoItemWidget(tk.Frame):
         self.thumbnail_canvas = tk.Canvas(self, width=200, height=200,
                                          bg="white", highlightthickness=1)
         self.thumbnail_canvas.pack(pady=5)
+        self.thumbnail_canvas.bind("<Button-1>", self.on_click)  # Allow clicking thumbnail
 
         # Rotation controls
         rotation_frame = tk.Frame(self)
         rotation_frame.pack()
+        rotation_frame.bind("<Button-1>", self.on_click)  # Propagate clicks
 
         self.rotation_label = tk.Label(rotation_frame,
                                        text=f"Rotation: {region.rotation}°")
         self.rotation_label.pack(side=tk.LEFT, padx=5)
+        self.rotation_label.bind("<Button-1>", self.on_click)  # Propagate clicks
 
-        tk.Button(rotation_frame, text="⟲", width=3,
-                 command=self.rotate_ccw).pack(side=tk.LEFT, padx=2)
-        tk.Button(rotation_frame, text="⟳", width=3,
-                 command=self.rotate_cw).pack(side=tk.LEFT, padx=2)
+        self.rotate_ccw_btn = tk.Button(rotation_frame, text="⟲", width=3,
+                 command=self.rotate_ccw)
+        self.rotate_ccw_btn.pack(side=tk.LEFT, padx=2)
+        self.rotate_ccw_btn.bind("<Button-1>", self.on_click_and_execute, add='+')
+
+        self.rotate_cw_btn = tk.Button(rotation_frame, text="⟳", width=3,
+                 command=self.rotate_cw)
+        self.rotate_cw_btn.pack(side=tk.LEFT, padx=2)
+        self.rotate_cw_btn.bind("<Button-1>", self.on_click_and_execute, add='+')
 
         # Action buttons
         action_frame = tk.Frame(self)
         action_frame.pack(pady=5)
+        action_frame.bind("<Button-1>", self.on_click)  # Propagate clicks
 
-        tk.Button(action_frame, text="Delete", width=8,
-                 command=self.delete_region).pack(side=tk.LEFT, padx=2)
-        tk.Button(action_frame, text="↑", width=3,
-                 command=self.move_up).pack(side=tk.LEFT, padx=2)
-        tk.Button(action_frame, text="↓", width=3,
-                 command=self.move_down).pack(side=tk.LEFT, padx=2)
+        self.delete_btn = tk.Button(action_frame, text="Delete", width=8,
+                 command=self.delete_region)
+        self.delete_btn.pack(side=tk.LEFT, padx=2)
+        self.delete_btn.bind("<Button-1>", self.on_click_and_execute, add='+')
+
+        self.move_up_btn = tk.Button(action_frame, text="↑", width=3,
+                 command=self.move_up)
+        self.move_up_btn.pack(side=tk.LEFT, padx=2)
+        self.move_up_btn.bind("<Button-1>", self.on_click_and_execute, add='+')
+
+        self.move_down_btn = tk.Button(action_frame, text="↓", width=3,
+                 command=self.move_down)
+        self.move_down_btn.pack(side=tk.LEFT, padx=2)
+        self.move_down_btn.bind("<Button-1>", self.on_click_and_execute, add='+')
 
         # Render initial thumbnail
         self.update_thumbnail()
@@ -482,6 +499,12 @@ class PhotoItemWidget(tk.Frame):
         # Sync with left panel and update highlights
         if self.photo_list.app:
             self.photo_list.app.sync_selection()
+
+    def on_click_and_execute(self, event):
+        """Handle click on button - select card first, then let button command execute"""
+        # Select this region first
+        self.on_click(event)
+        # Button's command will execute automatically after this
 
     def update_highlight(self):
         """Update visual highlight based on selection state"""
