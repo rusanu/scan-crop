@@ -51,4 +51,4 @@ output/
 *.spec
 
 #beads
-.beads/scan-crop.db
+.beads/*.db
