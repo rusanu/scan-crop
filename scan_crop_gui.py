@@ -195,6 +195,7 @@ class ApplicationState:
         self.photo_regions: List[PhotoRegion] = []
         self.selected_region_id: Optional[str] = None
         self.output_directory: Path = Path("./output")
+        self.source_format: str = "JPEG"  # Track source image format for export
 
     def add_region(self, region: PhotoRegion):
         """Add a new photo region"""
@@ -884,7 +885,10 @@ class PhotoCropperApp(tk.Tk):
         file_path = filedialog.askopenfilename(
             title="Select scanned image",
             filetypes=[
+                ("Image files", "*.jpg *.jpeg *.png *.webp"),
                 ("JPEG files", "*.jpg *.jpeg"),
+                ("PNG files", "*.png"),
+                ("WebP files", "*.webp"),
                 ("All files", "*.*")
             ]
         )
@@ -966,18 +970,31 @@ class PhotoCropperApp(tk.Tk):
                 if region.rotation != 0:
                     cropped = cropped.rotate(-region.rotation, expand=True)
 
+                # Determine file extension based on source format
+                format_to_ext = {
+                    "JPEG": ".jpg",
+                    "PNG": ".png",
+                    "WEBP": ".webp"
+                }
+                file_ext = format_to_ext.get(self.app_state.source_format, ".jpg")
+
                 # Generate filename - use custom name if provided, otherwise default
                 if region.name:
                     # Sanitize filename (remove invalid characters)
                     safe_name = "".join(c for c in region.name if c.isalnum() or c in (' ', '-', '_')).strip()
-                    filename = f"{safe_name}.jpg"
+                    filename = f"{safe_name}{file_ext}"
                 else:
-                    filename = f"{base_name}_photo_{idx:02d}.jpg"
+                    filename = f"{base_name}_photo_{idx:02d}{file_ext}"
 
                 output_file = output_path / filename
 
-                # Save with high quality
-                cropped.save(output_file, "JPEG", quality=95)
+                # Save with format-appropriate settings
+                if self.app_state.source_format == "JPEG":
+                    cropped.save(output_file, "JPEG", quality=95)
+                elif self.app_state.source_format == "PNG":
+                    cropped.save(output_file, "PNG", optimize=True)
+                elif self.app_state.source_format == "WEBP":
+                    cropped.save(output_file, "WEBP", quality=95)
                 exported_count += 1
 
             except Exception as e:
@@ -1114,6 +1131,14 @@ Tip: Hold arrow keys for continuous movement/resizing"""
             # Load image
             self.app_state.image_path = path
             self.app_state.original_image = Image.open(path)
+
+            # Detect and store source format for format-preserving export
+            source_format = self.app_state.original_image.format
+            if source_format in ("JPEG", "PNG", "WEBP"):
+                self.app_state.source_format = source_format
+            else:
+                # Default to JPEG for unknown formats
+                self.app_state.source_format = "JPEG"
 
             # Run detection
             print(f"Running detection on {path.name}...")
