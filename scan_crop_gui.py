@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List
 import uuid
+import sys
+import argparse
 
 from PIL import Image, ImageTk
 import cv2
@@ -924,7 +926,7 @@ class PhotoCropperApp(tk.Tk):
     """
     Main application window with two-panel layout.
     """
-    def __init__(self):
+    def __init__(self, initial_image_path: Optional[Path] = None):
         super().__init__()
 
         self.title("Photo Cropper - scan-crop")
@@ -960,8 +962,12 @@ class PhotoCropperApp(tk.Tk):
                                    anchor=tk.W, padx=5)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
-        # Show welcome message
-        self.show_welcome()
+        # Load initial image if provided, otherwise show welcome message
+        if initial_image_path:
+            # Schedule image loading after main window is rendered
+            self.after(100, lambda: self.load_image(initial_image_path))
+        else:
+            self.show_welcome()
 
     def setup_menu(self):
         """Create menu bar"""
@@ -1088,7 +1094,37 @@ class PhotoCropperApp(tk.Tk):
 # ============================================================================
 
 def main():
-    app = PhotoCropperApp()
+    """Main entry point with command-line argument support"""
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description="Photo Cropper - Extract individual photos from scanned images"
+    )
+    parser.add_argument(
+        "image",
+        nargs="?",  # Optional positional argument
+        type=str,
+        help="Path to image file to open automatically (optional)"
+    )
+
+    args = parser.parse_args()
+
+    # Convert image path to Path object if provided
+    initial_image = None
+    if args.image:
+        initial_image = Path(args.image)
+
+        # Validate that the file exists
+        if not initial_image.exists():
+            print(f"Error: Image file not found: {args.image}", file=sys.stderr)
+            sys.exit(1)
+
+        # Validate that it's a file (not a directory)
+        if not initial_image.is_file():
+            print(f"Error: Path is not a file: {args.image}", file=sys.stderr)
+            sys.exit(1)
+
+    # Create and run the application
+    app = PhotoCropperApp(initial_image_path=initial_image)
     app.mainloop()
 
 
