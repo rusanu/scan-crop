@@ -49,3 +49,6 @@ output/
 # Distribution
 *.exe
 *.spec
+
+#beads
+.beads/scan-crop.db

@@ -6,20 +6,15 @@ If you've scanned multiple physical photos on a flatbed scanner in one pass, thi
 
 ## Installation
 
-### Option 1: Download Pre-built Executable (Easiest)
+Requirements: Python 3.11 or higher
 
-1. Download `scan-crop.exe` from the releases page
-2. Place it in a folder of your choice (e.g., `C:\Tools\scan-crop\`)
-3. You're ready to go!
+1. Clone this repository:
+```cmd
+git clone <repository-url>
+cd scan-crop
+```
 
-### Option 2: Install Python Version
-
-If you have Python 3.11+ installed:
-
-1. Download or clone this repository
-2. Open Command Prompt or PowerShell in the project folder
-3. Run the following commands:
-
+2. Create a virtual environment and install dependencies:
 ```cmd
 python -m venv venv
 venv\Scripts\activate
@@ -33,7 +28,7 @@ pip install -r requirements.txt
 Process a single scanned image:
 
 ```cmd
-scan-crop.exe scan001.jpg
+python scan_crop.py scan001.jpg
 ```
 
 This will create an `output` folder and save the cropped photos there with names like:
@@ -46,19 +41,19 @@ This will create an `output` folder and save the cropped photos there with names
 Save cropped photos to a specific folder:
 
 ```cmd
-scan-crop.exe scan001.jpg --output C:\Photos\MyScans
+python scan_crop.py scan001.jpg --output C:\Photos\MyScans
 ```
 
 ### Process Multiple Files
 
 **Using Command Prompt (cmd.exe):**
 ```cmd
-for %f in (*.jpg) do scan-crop.exe "%f"
+for %f in (*.jpg) do python scan_crop.py "%f"
 ```
 
 **Using PowerShell:**
 ```powershell
-Get-ChildItem *.jpg | ForEach-Object { scan-crop.exe $_.Name }
+Get-ChildItem *.jpg | ForEach-Object { python scan_crop.py $_.Name }
 ```
 
 **Using File Explorer:**
@@ -96,19 +91,11 @@ Get-ChildItem *.jpg | ForEach-Object { scan-crop.exe $_.Name }
 
 scan-crop uses computer vision to:
 1. Convert the image to grayscale
-2. Detect edges using the Canny algorithm
-3. Find contours (outlines) of objects in the image
-4. Filter contours by size to identify photos
-5. Crop and save each detected photo as a separate file
-
-## Python Version Usage
-
-If you installed the Python version instead of the executable:
-
-```cmd
-python scan_crop.py scan001.jpg
-python scan_crop.py scan001.jpg --output ./photos
-```
+2. Apply binary thresholding using Otsu's method
+3. Clean up the image with morphological operations
+4. Find contours (outlines) of objects in the image
+5. Filter contours by size, aspect ratio, and dimensions to identify photos
+6. Crop and save each detected photo as a separate file
 
 ## License
 
