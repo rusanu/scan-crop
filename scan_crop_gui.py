@@ -375,6 +375,11 @@ class SourceImageCanvas(tk.Canvas):
 
         # If mode is NONE, check if user is starting to drag outside regions
         if self.interaction_mode == InteractionMode.NONE:
+            # Add drag threshold to avoid accidental small drags (10 pixels)
+            drag_distance = (dx**2 + dy**2) ** 0.5
+            if drag_distance < 10:
+                return  # Ignore small movements
+
             # User started dragging outside any region - enter DRAWING_NEW mode
             self.interaction_mode = InteractionMode.DRAWING_NEW
             self.new_region_preview = None  # Will be drawn in draw_regions
