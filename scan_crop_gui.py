@@ -184,6 +184,14 @@ class PhotoRegion:
                 self.y <= py <= self.y + self.height)
 
 
+@dataclass
+class AppConfig:
+    """Application configuration/preferences"""
+    overlay_color: str = "green"  # Color for region overlays: "green" or "red"
+    export_format: str = "auto"   # Export format: "auto" (same as source), "jpeg", "png"
+    filename_include_source: bool = True  # Include source filename in exports
+
+
 class ApplicationState:
     """
     Manages all application state including image, regions, selection.
@@ -196,6 +204,7 @@ class ApplicationState:
         self.selected_region_id: Optional[str] = None
         self.output_directory: Path = Path("./output")
         self.source_format: str = "JPEG"  # Track source image format for export
+        self.config: AppConfig = AppConfig()  # Application preferences
 
     def add_region(self, region: PhotoRegion):
         """Add a new photo region"""
@@ -499,9 +508,14 @@ class SourceImageCanvas(tk.Canvas):
             x2, y2 = self.image_to_canvas(region.x + region.width,
                                            region.y + region.height)
 
-            # Determine color (selected vs unselected)
+            # Determine color based on preferences and selection state
             is_selected = (region.region_id == self.app_state.selected_region_id)
-            color = "green" if is_selected else "red"
+            if self.app_state.config.overlay_color == "green":
+                # Green for selected, red for unselected
+                color = "green" if is_selected else "red"
+            else:
+                # Red for selected, green for unselected
+                color = "red" if is_selected else "green"
             width = 3 if is_selected else 2
 
             # Draw rectangle
@@ -770,6 +784,94 @@ class PhotoPreviewPanel(tk.Frame):
 
 
 # ============================================================================
+# Preferences Dialog
+# ============================================================================
+
+class PreferencesDialog(tk.Toplevel):
+    """Preferences/Settings dialog"""
+    def __init__(self, parent, config: AppConfig):
+        super().__init__(parent)
+        self.title("Preferences")
+        self.config = config
+        self.result = None
+
+        # Make dialog modal
+        self.transient(parent)
+        self.grab_set()
+
+        # Create UI
+        self.create_widgets()
+
+        # Center on parent
+        self.geometry("400x250")
+        self.resizable(False, False)
+
+    def create_widgets(self):
+        """Create preference controls"""
+        # Main frame with padding
+        main_frame = tk.Frame(self, padx=20, pady=20)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Overlay Color section
+        tk.Label(main_frame, text="Region Overlay Color:", font=("Arial", 10, "bold")).grid(
+            row=0, column=0, sticky=tk.W, pady=(0, 5))
+
+        self.overlay_var = tk.StringVar(value=self.config.overlay_color)
+        tk.Radiobutton(main_frame, text="Green (selected) / Red (unselected)",
+                      variable=self.overlay_var, value="green").grid(
+            row=1, column=0, sticky=tk.W, padx=20)
+        tk.Radiobutton(main_frame, text="Red (selected) / Green (unselected)",
+                      variable=self.overlay_var, value="red").grid(
+            row=2, column=0, sticky=tk.W, padx=20)
+
+        # Export Format section
+        tk.Label(main_frame, text="Export Format:", font=("Arial", 10, "bold")).grid(
+            row=3, column=0, sticky=tk.W, pady=(15, 5))
+
+        self.format_var = tk.StringVar(value=self.config.export_format)
+        tk.Radiobutton(main_frame, text="Auto (same as source image)",
+                      variable=self.format_var, value="auto").grid(
+            row=4, column=0, sticky=tk.W, padx=20)
+        tk.Radiobutton(main_frame, text="Always JPEG",
+                      variable=self.format_var, value="jpeg").grid(
+            row=5, column=0, sticky=tk.W, padx=20)
+        tk.Radiobutton(main_frame, text="Always PNG",
+                      variable=self.format_var, value="png").grid(
+            row=6, column=0, sticky=tk.W, padx=20)
+
+        # Filename Structure section
+        tk.Label(main_frame, text="Export Filename:", font=("Arial", 10, "bold")).grid(
+            row=7, column=0, sticky=tk.W, pady=(15, 5))
+
+        self.filename_var = tk.BooleanVar(value=self.config.filename_include_source)
+        tk.Checkbutton(main_frame, text="Include source filename (e.g., scan1-photo01.jpg)",
+                      variable=self.filename_var).grid(
+            row=8, column=0, sticky=tk.W, padx=20)
+
+        # Buttons
+        button_frame = tk.Frame(main_frame)
+        button_frame.grid(row=9, column=0, pady=(20, 0))
+
+        tk.Button(button_frame, text="OK", command=self.on_ok, width=10).pack(
+            side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="Cancel", command=self.on_cancel, width=10).pack(
+            side=tk.LEFT, padx=5)
+
+    def on_ok(self):
+        """Save preferences and close"""
+        self.config.overlay_color = self.overlay_var.get()
+        self.config.export_format = self.format_var.get()
+        self.config.filename_include_source = self.filename_var.get()
+        self.result = True
+        self.destroy()
+
+    def on_cancel(self):
+        """Close without saving"""
+        self.result = False
+        self.destroy()
+
+
+# ============================================================================
 # Main Application
 # ============================================================================
 
@@ -941,32 +1043,49 @@ class PhotoCropperApp(tk.Tk):
             self.source_canvas.refresh()
             self.sync_selection()
 
+    def get_export_format_and_extension(self):
+        """Determine export format based on config and source format"""
+        if self.app_state.config.export_format == "auto":
+            # Use source format
+            format_name = self.app_state.source_format
+        elif self.app_state.config.export_format == "jpeg":
+            format_name = "JPEG"
+        elif self.app_state.config.export_format == "png":
+            format_name = "PNG"
+        else:
+            format_name = "JPEG"  # Default fallback
+
+        # Map format to extension
+        ext_map = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
+        return format_name, ext_map.get(format_name, ".jpg")
+
     def export_selected_photo(self):
         """Export only the currently selected photo"""
         region = self.app_state.get_selected_region()
         if not region:
             return
 
-        # Determine file extension based on source format
-        format_to_ext = {
-            "JPEG": ".jpg",
-            "PNG": ".png",
-            "WEBP": ".webp"
-        }
-        file_ext = format_to_ext.get(self.app_state.source_format, ".jpg")
+        # Determine format and extension based on config
+        format_name, file_ext = self.get_export_format_and_extension()
 
-        # Get default filename
+        # Get default filename based on config
         if self.app_state.image_path:
             base_name = self.app_state.image_path.stem
         else:
             base_name = "photo"
 
-        # Use custom name if provided, otherwise use base name
+        # Build filename according to config
         if region.name:
             safe_name = "".join(c for c in region.name if c.isalnum() or c in (' ', '-', '_')).strip()
-            default_filename = f"{safe_name}{file_ext}"
+            if self.app_state.config.filename_include_source and self.app_state.image_path:
+                default_filename = f"{base_name}-{safe_name}{file_ext}"
+            else:
+                default_filename = f"{safe_name}{file_ext}"
         else:
-            default_filename = f"{base_name}_photo{file_ext}"
+            if self.app_state.config.filename_include_source:
+                default_filename = f"{base_name}_photo{file_ext}"
+            else:
+                default_filename = f"photo{file_ext}"
 
         # Ask user where to save
         output_file = filedialog.asksaveasfilename(
@@ -992,11 +1111,11 @@ class PhotoCropperApp(tk.Tk):
                 cropped = cropped.rotate(-region.rotation, expand=True)
 
             # Save with format-appropriate settings
-            if self.app_state.source_format == "JPEG":
+            if format_name == "JPEG":
                 cropped.save(output_file, "JPEG", quality=95)
-            elif self.app_state.source_format == "PNG":
+            elif format_name == "PNG":
                 cropped.save(output_file, "PNG", optimize=True)
-            elif self.app_state.source_format == "WEBP":
+            elif format_name == "WEBP":
                 cropped.save(output_file, "WEBP", quality=95)
 
             # Update default output directory
@@ -1035,6 +1154,9 @@ class PhotoCropperApp(tk.Tk):
         else:
             base_name = "photo"
 
+        # Determine format and extension based on config
+        format_name, file_ext = self.get_export_format_and_extension()
+
         # Export each region
         exported_count = 0
         for idx, region in enumerate(self.app_state.photo_regions, start=1):
@@ -1046,30 +1168,28 @@ class PhotoCropperApp(tk.Tk):
                 if region.rotation != 0:
                     cropped = cropped.rotate(-region.rotation, expand=True)
 
-                # Determine file extension based on source format
-                format_to_ext = {
-                    "JPEG": ".jpg",
-                    "PNG": ".png",
-                    "WEBP": ".webp"
-                }
-                file_ext = format_to_ext.get(self.app_state.source_format, ".jpg")
-
-                # Generate filename - use custom name if provided, otherwise default
+                # Generate filename according to config
                 if region.name:
                     # Sanitize filename (remove invalid characters)
                     safe_name = "".join(c for c in region.name if c.isalnum() or c in (' ', '-', '_')).strip()
-                    filename = f"{safe_name}{file_ext}"
+                    if self.app_state.config.filename_include_source and self.app_state.image_path:
+                        filename = f"{base_name}-{safe_name}{file_ext}"
+                    else:
+                        filename = f"{safe_name}{file_ext}"
                 else:
-                    filename = f"{base_name}_photo_{idx:02d}{file_ext}"
+                    if self.app_state.config.filename_include_source:
+                        filename = f"{base_name}_photo_{idx:02d}{file_ext}"
+                    else:
+                        filename = f"photo_{idx:02d}{file_ext}"
 
                 output_file = output_path / filename
 
                 # Save with format-appropriate settings
-                if self.app_state.source_format == "JPEG":
+                if format_name == "JPEG":
                     cropped.save(output_file, "JPEG", quality=95)
-                elif self.app_state.source_format == "PNG":
+                elif format_name == "PNG":
                     cropped.save(output_file, "PNG", optimize=True)
-                elif self.app_state.source_format == "WEBP":
+                elif format_name == "WEBP":
                     cropped.save(output_file, "WEBP", quality=95)
                 exported_count += 1
 
@@ -1088,7 +1208,12 @@ class PhotoCropperApp(tk.Tk):
         menubar = tk.Menu(self)
         self.config(menu=menubar)
 
-        # Help menu only (actions are in toolbar)
+        # Edit menu
+        edit_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Edit", menu=edit_menu)
+        edit_menu.add_command(label="Preferences...", command=self.show_preferences)
+
+        # Help menu
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
         help_menu.add_command(label="Keyboard Shortcuts", command=self.show_shortcuts)
@@ -1252,6 +1377,15 @@ Tip: Hold arrow keys for continuous movement/resizing"""
             messagebox.showerror("Error Loading Image", str(e))
             import traceback
             traceback.print_exc()
+
+    def show_preferences(self):
+        """Show preferences dialog"""
+        dialog = PreferencesDialog(self, self.app_state.config)
+        self.wait_window(dialog)
+
+        # If preferences were changed, refresh display
+        if dialog.result:
+            self.source_canvas.refresh()
 
     def show_about(self):
         """Show about dialog"""
