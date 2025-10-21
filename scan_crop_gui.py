@@ -873,6 +873,14 @@ class PhotoCropperApp(tk.Tk):
             side=tk.LEFT, fill=tk.Y, padx=5, pady=2
         )
 
+        # Export Selected Photo button
+        self.export_selected_btn = tk.Button(
+            self.toolbar, text="Export Selected...",
+            command=self.export_selected_photo,
+            state=tk.DISABLED
+        )
+        self.export_selected_btn.pack(side=tk.LEFT, padx=2, pady=2)
+
         # Export All button (always enabled when photos exist)
         self.export_all_btn = tk.Button(
             self.toolbar, text="Export All Photos...",
@@ -906,8 +914,9 @@ class PhotoCropperApp(tk.Tk):
         self.rotate_ccw_btn.config(state=state)
         self.rotate_cw_btn.config(state=state)
         self.delete_btn.config(state=state)
+        self.export_selected_btn.config(state=state)
 
-        # Export button enabled when there are regions
+        # Export All button enabled when there are regions
         self.export_all_btn.config(state=tk.NORMAL if has_regions else tk.DISABLED)
 
     def rotate_selected_cw(self):
@@ -931,6 +940,73 @@ class PhotoCropperApp(tk.Tk):
             self.app_state.remove_region(region.region_id)
             self.source_canvas.refresh()
             self.sync_selection()
+
+    def export_selected_photo(self):
+        """Export only the currently selected photo"""
+        region = self.app_state.get_selected_region()
+        if not region:
+            return
+
+        # Determine file extension based on source format
+        format_to_ext = {
+            "JPEG": ".jpg",
+            "PNG": ".png",
+            "WEBP": ".webp"
+        }
+        file_ext = format_to_ext.get(self.app_state.source_format, ".jpg")
+
+        # Get default filename
+        if self.app_state.image_path:
+            base_name = self.app_state.image_path.stem
+        else:
+            base_name = "photo"
+
+        # Use custom name if provided, otherwise use base name
+        if region.name:
+            safe_name = "".join(c for c in region.name if c.isalnum() or c in (' ', '-', '_')).strip()
+            default_filename = f"{safe_name}{file_ext}"
+        else:
+            default_filename = f"{base_name}_photo{file_ext}"
+
+        # Ask user where to save
+        output_file = filedialog.asksaveasfilename(
+            title="Save Photo As",
+            initialdir=self.app_state.output_directory,
+            initialfile=default_filename,
+            defaultextension=file_ext,
+            filetypes=[
+                ("Image files", f"*{file_ext}"),
+                ("All files", "*.*")
+            ]
+        )
+
+        if not output_file:
+            return  # User cancelled
+
+        try:
+            # Crop from original
+            cropped = self.app_state.original_image.crop(region.to_bbox())
+
+            # Apply rotation
+            if region.rotation != 0:
+                cropped = cropped.rotate(-region.rotation, expand=True)
+
+            # Save with format-appropriate settings
+            if self.app_state.source_format == "JPEG":
+                cropped.save(output_file, "JPEG", quality=95)
+            elif self.app_state.source_format == "PNG":
+                cropped.save(output_file, "PNG", optimize=True)
+            elif self.app_state.source_format == "WEBP":
+                cropped.save(output_file, "WEBP", quality=95)
+
+            # Update default output directory
+            self.app_state.output_directory = Path(output_file).parent
+
+            # Show success in status bar
+            self.status_bar.config(text=f"Exported photo to {Path(output_file).name}")
+
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export photo: {str(e)}")
 
     def export_all_photos(self):
         """Export all photos to selected directory"""
