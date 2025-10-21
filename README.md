@@ -1,5 +1,9 @@
 # scan-crop
 
+[![Build and Release](https://github.com/rusanu/scan-crop/actions/workflows/build.yml/badge.svg)](https://github.com/rusanu/scan-crop/actions/workflows/build.yml)
+[![Latest Release](https://img.shields.io/github/v/release/rusanu/scan-crop?label=latest%20release)](https://github.com/rusanu/scan-crop/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/rusanu/scan-crop/total?label=downloads)](https://github.com/rusanu/scan-crop/releases)
+
 Interactive GUI application for extracting individual photos from scanned images.
 
 If you've scanned multiple physical photos on a flatbed scanner in one pass, scan-crop will automatically detect each photo and let you adjust the crop regions, apply rotations, and export them as separate high-quality JPEG files.
