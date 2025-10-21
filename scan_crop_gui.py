@@ -451,7 +451,7 @@ class SourceImageCanvas(tk.Canvas):
 
                 # Refresh both panels
                 if self.app:
-                    self.app.photo_list.refresh_list()
+                    self.app.photo_list.refresh()
                     self.app.sync_selection()
 
                 self.refresh()
