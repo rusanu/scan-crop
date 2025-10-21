@@ -165,6 +165,7 @@ class PhotoRegion:
     is_manual: bool = False  # True if user-created, False if auto-detected
     region_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     list_order: int = 0      # Display order in right panel (for export sequencing)
+    name: str = ""           # User-editable name for export filename
 
     def to_bbox(self):
         """Returns (x1, y1, x2, y2) tuple for PIL crop"""
@@ -502,7 +503,18 @@ class SourceImageCanvas(tk.Canvas):
             if is_selected:
                 self.draw_resize_handles(x1, y1, x2, y2)
 
-            # Show rotation indicator if rotated
+            # Show name label at top-left of region
+            if region.name:
+                # Position text just below top border
+                text_x = x1 + 5
+                text_y = y1 + 12
+                # Draw text with background for better visibility
+                self.create_text(text_x, text_y, text=region.name,
+                               fill=color, font=("Arial", 10, "bold"),
+                               anchor=tk.W,
+                               tags=f"region_{region.region_id}")
+
+            # Show rotation indicator if rotated (center of region)
             if region.rotation != 0:
                 cx = (x1 + x2) / 2
                 cy = (y1 + y2) / 2
@@ -644,6 +656,15 @@ class PhotoPreviewPanel(tk.Frame):
                                    bg="lightgray")
         self.info_label.pack(pady=5)
 
+        # Name editor frame
+        name_frame = tk.Frame(self, bg="lightgray")
+        name_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        tk.Label(name_frame, text="Name:", bg="lightgray").pack(side=tk.LEFT, padx=(0, 5))
+        self.name_entry = tk.Entry(name_frame)
+        self.name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.name_entry.bind("<KeyRelease>", self.on_name_changed)
+
         # Preview canvas
         self.preview_canvas = tk.Canvas(self, bg="white", highlightthickness=1)
         self.preview_canvas.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -654,6 +675,15 @@ class PhotoPreviewPanel(tk.Frame):
     def on_resize(self, event):
         """Handle canvas resize"""
         self.refresh()
+
+    def on_name_changed(self, event):
+        """Handle name entry change"""
+        selected_region = self.app_state.get_selected_region()
+        if selected_region:
+            selected_region.name = self.name_entry.get()
+            # Refresh left panel to update name display
+            if self.app:
+                self.app.source_canvas.draw_regions()
 
     def refresh(self):
         """Update preview to show currently selected photo"""
@@ -666,6 +696,8 @@ class PhotoPreviewPanel(tk.Frame):
         if not selected_region or not self.app_state.original_image:
             # Show placeholder
             self.info_label.config(text="")
+            self.name_entry.delete(0, tk.END)
+            self.name_entry.config(state=tk.DISABLED)
             canvas_w = self.preview_canvas.winfo_width()
             canvas_h = self.preview_canvas.winfo_height()
             if canvas_w > 1 and canvas_h > 1:
@@ -684,6 +716,18 @@ class PhotoPreviewPanel(tk.Frame):
             self.info_label.config(text=f"Photo {idx} of {total}")
         except ValueError:
             self.info_label.config(text="")
+
+        # Update name entry
+        self.name_entry.config(state=tk.NORMAL)
+        self.name_entry.delete(0, tk.END)
+        # Set default name if empty
+        if not selected_region.name:
+            try:
+                idx = self.app_state.photo_regions.index(selected_region) + 1
+                selected_region.name = f"Photo {idx}"
+            except ValueError:
+                selected_region.name = "Photo"
+        self.name_entry.insert(0, selected_region.name)
 
         # Crop from original image
         cropped = self.app_state.original_image.crop(selected_region.to_bbox())
@@ -918,8 +962,14 @@ class PhotoCropperApp(tk.Tk):
                 if region.rotation != 0:
                     cropped = cropped.rotate(-region.rotation, expand=True)
 
-                # Generate filename
-                filename = f"{base_name}_photo_{idx:02d}.jpg"
+                # Generate filename - use custom name if provided, otherwise default
+                if region.name:
+                    # Sanitize filename (remove invalid characters)
+                    safe_name = "".join(c for c in region.name if c.isalnum() or c in (' ', '-', '_')).strip()
+                    filename = f"{safe_name}.jpg"
+                else:
+                    filename = f"{base_name}_photo_{idx:02d}.jpg"
+
                 output_file = output_path / filename
 
                 # Save with high quality
