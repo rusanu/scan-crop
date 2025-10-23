@@ -1129,12 +1129,35 @@ class PhotoPreviewPanel(tk.Frame):
         self.name_entry.delete(0, tk.END)
         self.name_entry.insert(0, selected_region.name)
 
-        # Crop from original image
-        cropped = self.app_state.original_image.crop(selected_region.to_bbox())
-
-        # Apply region rotation (straighten tilted photo)
+        # Extract rotated region from original image
         if selected_region.region_rotation != 0:
-            cropped = cropped.rotate(-selected_region.region_rotation, expand=True)
+            # For rotated regions, we need to:
+            # 1. Rotate the source image around the region center
+            # 2. Crop the straightened rectangle
+            # 3. This gives us the straightened photo
+
+            # Calculate region center in source image
+            cx = selected_region.x + selected_region.width / 2
+            cy = selected_region.y + selected_region.height / 2
+
+            # Rotate entire source image around this point
+            # First, we need to translate so center is at origin, rotate, translate back
+            # PIL rotate() rotates around image center, so we use a different approach:
+
+            # Get the source image and rotate it
+            # Use expand=False to keep same dimensions, fillcolor to handle edges
+            rotated_source = self.app_state.original_image.rotate(
+                -selected_region.region_rotation,  # Negative to straighten
+                center=(cx, cy),
+                expand=False,
+                fillcolor=(255, 255, 255)
+            )
+
+            # Now crop the straightened rectangle from the rotated source
+            cropped = rotated_source.crop(selected_region.to_bbox())
+        else:
+            # No rotation - simple axis-aligned crop
+            cropped = self.app_state.original_image.crop(selected_region.to_bbox())
 
         # Apply photo rotation (orientation correction after straightening)
         if selected_region.photo_rotation != 0:
@@ -1594,12 +1617,25 @@ class PhotoCropperApp(tk.Tk):
             return  # User cancelled
 
         try:
-            # Crop from original
-            cropped = self.app_state.original_image.crop(region.to_bbox())
-
-            # Apply region rotation (straighten tilted photo)
+            # Extract rotated region from original image
             if region.region_rotation != 0:
-                cropped = cropped.rotate(-region.region_rotation, expand=True)
+                # Calculate region center
+                cx = region.x + region.width / 2
+                cy = region.y + region.height / 2
+
+                # Rotate source image around region center
+                rotated_source = self.app_state.original_image.rotate(
+                    -region.region_rotation,
+                    center=(cx, cy),
+                    expand=False,
+                    fillcolor=(255, 255, 255)
+                )
+
+                # Crop the straightened rectangle
+                cropped = rotated_source.crop(region.to_bbox())
+            else:
+                # No rotation - simple crop
+                cropped = self.app_state.original_image.crop(region.to_bbox())
 
             # Apply photo rotation (orientation correction)
             if region.photo_rotation != 0:
@@ -1656,12 +1692,25 @@ class PhotoCropperApp(tk.Tk):
         exported_count = 0
         for idx, region in enumerate(self.app_state.photo_regions, start=1):
             try:
-                # Crop from original
-                cropped = self.app_state.original_image.crop(region.to_bbox())
-
-                # Apply region rotation (straighten tilted photo)
+                # Extract rotated region from original image
                 if region.region_rotation != 0:
-                    cropped = cropped.rotate(-region.region_rotation, expand=True)
+                    # Calculate region center
+                    cx = region.x + region.width / 2
+                    cy = region.y + region.height / 2
+
+                    # Rotate source image around region center
+                    rotated_source = self.app_state.original_image.rotate(
+                        -region.region_rotation,
+                        center=(cx, cy),
+                        expand=False,
+                        fillcolor=(255, 255, 255)
+                    )
+
+                    # Crop the straightened rectangle
+                    cropped = rotated_source.crop(region.to_bbox())
+                else:
+                    # No rotation - simple crop
+                    cropped = self.app_state.original_image.crop(region.to_bbox())
 
                 # Apply photo rotation (orientation correction)
                 if region.photo_rotation != 0:
