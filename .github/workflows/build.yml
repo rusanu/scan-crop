@@ -63,34 +63,37 @@ jobs:
 
     - name: Build executable with PyInstaller
       run: |
-        pyinstaller --onefile `
+        pyinstaller --onedir `
           --name scan-crop `
           --windowed `
           --icon=NONE `
           --add-data "version.py;." `
           --hidden-import=cv2 `
-          --hidden-import=numpy.core._dtype_ctypes `
           --collect-all cv2 `
           scan_crop_gui.py
+          
+    - name: Create zip archive
+      run: |
+        Compress-Archive -Path dist/scan-crop/* -DestinationPath scan-crop-${{ steps.get_version.outputs.VERSION }}.zip
 
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
-        name: scan-crop-${{ steps.get_version.outputs.VERSION }}
-        path: dist/scan-crop.exe
+        name: scan-crop-${{ steps.get_version.outputs.VERSION }}.zip
+        path: scan-crop-${{ steps.get_version.outputs.VERSION }}.zip
         retention-days: 30
 
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: dist/scan-crop.exe
+        files: scan-crop-${{ steps.get_version.outputs.VERSION }}.zip
         body: |
           ## scan-crop ${{ steps.get_version.outputs.VERSION }}
 
           Windows executable for extracting individual photos from scanned images.
 
-          **Installation:** Download `scan-crop.exe` and run it directly (no installation needed)
+          **Installation:** Download `scan-crop-${{ steps.get_version.outputs.VERSION }}.zip`, extract it and run `scan-crop.exe` directly (no installation needed)
 
           **Usage:**
           - Launch the app and click "Open Image..."
