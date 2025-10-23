@@ -145,6 +145,7 @@ class InteractionMode(Enum):
     RESIZING_SW = 8       # Resizing from southwest corner
     RESIZING_W = 9        # Resizing from west edge
     DRAWING_NEW = 10      # Drawing new region
+    ROTATING = 11         # Rotating region via rotation handle
 
 
 # ============================================================================
@@ -295,7 +296,7 @@ class PhotoRegion:
     height: int
 
     # Processing parameters (applied during preview and export)
-    rotation: int = 0        # Rotation angle: 0, 90, 180, 270
+    rotation: float = 0.0    # Rotation angle in degrees (0-360, arbitrary angles supported)
     brightness: int = 0      # -100 to +100 (future enhancement)
     contrast: int = 0        # -100 to +100 (future enhancement)
     denoise: bool = False    # Noise reduction toggle (future enhancement)
@@ -554,6 +555,24 @@ class SourceImageCanvas(tk.Canvas):
             selected_region.x = max(0, orig_x + dx)
             selected_region.y = max(0, orig_y + dy)
 
+        elif self.interaction_mode == InteractionMode.ROTATING:
+            # Rotate region - calculate angle from center to mouse
+            import math
+
+            # Get region center in canvas coordinates
+            x1, y1 = self.image_to_canvas(selected_region.x, selected_region.y)
+            x2, y2 = self.image_to_canvas(selected_region.x + selected_region.width,
+                                          selected_region.y + selected_region.height)
+            cx = (x1 + x2) / 2
+            cy = (y1 + y2) / 2
+
+            # Calculate angle from center to mouse (in degrees)
+            angle_rad = math.atan2(event.y - cy, event.x - cx)
+            angle_deg = math.degrees(angle_rad)
+
+            # Convert to 0-360 range, adjusting for "up" being the reference (90° offset)
+            selected_region.rotation = (angle_deg + 90) % 360
+
         else:
             # Resizing - update based on which handle
             self.resize_region(selected_region, orig_x, orig_y, orig_w, orig_h, dx, dy)
@@ -634,13 +653,10 @@ class SourceImageCanvas(tk.Canvas):
             self.config(cursor="")
 
     def draw_regions(self):
-        """Draw all crop region rectangles"""
-        for region in self.app_state.photo_regions:
-            # Convert to canvas coordinates
-            x1, y1 = self.image_to_canvas(region.x, region.y)
-            x2, y2 = self.image_to_canvas(region.x + region.width,
-                                           region.y + region.height)
+        """Draw all crop region rectangles (potentially rotated)"""
+        import math
 
+        for region in self.app_state.photo_regions:
             # Determine color based on preferences and selection state
             is_selected = (region.region_id == self.app_state.selected_region_id)
             if is_selected:
@@ -652,14 +668,77 @@ class SourceImageCanvas(tk.Canvas):
                 color = self.app_state.config.overlay_color_unselected
                 width = 2
 
-            # Draw rectangle
-            self.create_rectangle(x1, y1, x2, y2,
-                                outline=color, width=width,
-                                tags=f"region_{region.region_id}")
+            # Calculate rotated rectangle corners if rotation is applied
+            if region.rotation != 0:
+                # Center of region in image space
+                img_cx = region.x + region.width / 2
+                img_cy = region.y + region.height / 2
 
-            # Draw resize handles for selected region
+                # Calculate 4 corners in image space (before rotation)
+                corners_img = [
+                    (region.x, region.y),                           # Top-left
+                    (region.x + region.width, region.y),            # Top-right
+                    (region.x + region.width, region.y + region.height),  # Bottom-right
+                    (region.x, region.y + region.height)            # Bottom-left
+                ]
+
+                # Rotate each corner around center
+                angle_rad = math.radians(region.rotation)
+                rotated_corners_img = []
+                for cx, cy in corners_img:
+                    # Translate to origin
+                    tx = cx - img_cx
+                    ty = cy - img_cy
+                    # Rotate
+                    rx = tx * math.cos(angle_rad) - ty * math.sin(angle_rad)
+                    ry = tx * math.sin(angle_rad) + ty * math.cos(angle_rad)
+                    # Translate back
+                    rotated_corners_img.append((rx + img_cx, ry + img_cy))
+
+                # Convert to canvas coordinates
+                canvas_points = []
+                for px, py in rotated_corners_img:
+                    canvas_points.extend(self.image_to_canvas(px, py))
+
+                # Draw rotated polygon
+                self.create_polygon(canvas_points,
+                                  outline=color, fill="", width=width,
+                                  tags=f"region_{region.region_id}")
+
+                # Get axis-aligned bounding box for handles (in canvas space)
+                canvas_xs = [canvas_points[i] for i in range(0, len(canvas_points), 2)]
+                canvas_ys = [canvas_points[i] for i in range(1, len(canvas_points), 2)]
+                x1, x2 = min(canvas_xs), max(canvas_xs)
+                y1, y2 = min(canvas_ys), max(canvas_ys)
+
+            else:
+                # No rotation - draw normal rectangle
+                x1, y1 = self.image_to_canvas(region.x, region.y)
+                x2, y2 = self.image_to_canvas(region.x + region.width,
+                                              region.y + region.height)
+
+                # Draw rectangle
+                self.create_rectangle(x1, y1, x2, y2,
+                                    outline=color, width=width,
+                                    tags=f"region_{region.region_id}")
+
+            # Draw resize handles and rotation handle for selected region
+            # Use axis-aligned bounding box for handle positions
             if is_selected:
-                self.draw_resize_handles(x1, y1, x2, y2)
+                # For rotated regions, draw handles at rotated corners
+                if region.rotation != 0:
+                    # Get the actual rotated corner positions
+                    img_cx = region.x + region.width / 2
+                    img_cy = region.y + region.height / 2
+                    self.draw_rotated_handles(img_cx, img_cy, region.width, region.height, region.rotation)
+                    self.draw_rotation_handle_rotated(img_cx, img_cy, region.width, region.height, region.rotation, color)
+                else:
+                    # Normal handles for non-rotated regions
+                    x1, y1 = self.image_to_canvas(region.x, region.y)
+                    x2, y2 = self.image_to_canvas(region.x + region.width, region.y + region.height)
+                    self.draw_resize_handles(x1, y1, x2, y2)
+                    self.draw_rotation_handle_rotated(region.x + region.width/2, region.y + region.height/2,
+                                                     region.width, region.height, region.rotation, color)
 
             # Show name label at top-left of region
             if region.name:
@@ -676,7 +755,7 @@ class SourceImageCanvas(tk.Canvas):
             if region.rotation != 0:
                 cx = (x1 + x2) / 2
                 cy = (y1 + y2) / 2
-                self.create_text(cx, cy, text=f"{region.rotation}°",
+                self.create_text(cx, cy, text=f"{int(round(region.rotation))}°",
                                fill=color, font=("Arial", 12, "bold"),
                                tags=f"region_{region.region_id}")
 
@@ -716,30 +795,194 @@ class SourceImageCanvas(tk.Canvas):
                 tags="handle"
             )
 
-    def get_handle_at_point(self, canvas_x, canvas_y, region):
-        """Check if point is on a resize handle. Returns InteractionMode."""
-        # Convert region to canvas coords
-        x1, y1 = self.image_to_canvas(region.x, region.y)
-        x2, y2 = self.image_to_canvas(region.x + region.width, region.y + region.height)
+    def draw_rotation_handle(self, x1, y1, x2, y2, rotation_angle):
+        """Draw rotation handle extending from center pointing 'up' (accounting for current rotation)"""
+        import math
 
+        # Center of region
+        cx = (x1 + x2) / 2
+        cy = (y1 + y2) / 2
+
+        # Handle length (proportional to region size, but with min/max)
+        region_size = min(abs(x2 - x1), abs(y2 - y1))
+        handle_length = min(max(region_size * 0.4, 40), 80)
+
+        # Calculate handle endpoint (pointing "up" = -90° in standard coordinates, adjusted by rotation)
+        # Convert rotation to radians (tkinter uses degrees, but we need radians for math)
+        # "Up" is -90° in screen coordinates (y increases downward)
+        angle_rad = math.radians(-90 + rotation_angle)
+
+        handle_x = cx + handle_length * math.cos(angle_rad)
+        handle_y = cy + handle_length * math.sin(angle_rad)
+
+        # Draw handle line
+        self.create_line(cx, cy, handle_x, handle_y,
+                        fill="blue", width=2,
+                        tags="rotation_handle")
+
+        # Draw draggable circle at end
+        handle_radius = 6
+        self.create_oval(
+            handle_x - handle_radius, handle_y - handle_radius,
+            handle_x + handle_radius, handle_y + handle_radius,
+            fill="blue", outline="white", width=2,
+            tags="rotation_handle"
+        )
+
+    def draw_rotated_handles(self, img_cx, img_cy, width, height, rotation_angle):
+        """Draw 8 resize handles on rotated region corners and edges"""
+        import math
+
+        handle_size = 8
+        angle_rad = math.radians(rotation_angle)
+
+        # Define handle positions relative to center (before rotation)
+        hw = width / 2
+        hh = height / 2
+        handle_positions = [
+            (-hw, -hh),      # NW corner
+            (0, -hh),        # N midpoint
+            (hw, -hh),       # NE corner
+            (hw, 0),         # E midpoint
+            (hw, hh),        # SE corner
+            (0, hh),         # S midpoint
+            (-hw, hh),       # SW corner
+            (-hw, 0),        # W midpoint
+        ]
+
+        # Rotate and draw each handle
+        for dx, dy in handle_positions:
+            # Rotate point around origin
+            rx = dx * math.cos(angle_rad) - dy * math.sin(angle_rad)
+            ry = dx * math.sin(angle_rad) + dy * math.cos(angle_rad)
+
+            # Translate to image space
+            img_x = img_cx + rx
+            img_y = img_cy + ry
+
+            # Convert to canvas space
+            canvas_x, canvas_y = self.image_to_canvas(img_x, img_y)
+
+            # Draw handle
+            self.create_rectangle(
+                canvas_x - handle_size/2, canvas_y - handle_size/2,
+                canvas_x + handle_size/2, canvas_y + handle_size/2,
+                fill="white", outline="green", width=2,
+                tags="handle"
+            )
+
+    def draw_rotation_handle_rotated(self, img_cx, img_cy, width, height, rotation_angle, color):
+        """Draw rotation handle for rotated region - handle rotates with the region"""
+        import math
+
+        # Handle length (proportional to region size, but with min/max)
+        region_size = min(width, height) * self.scale_factor  # Account for canvas scaling
+        handle_length = min(max(region_size * 0.4, 40), 80)
+
+        # Calculate handle endpoint pointing "up" relative to rotated rectangle
+        # "Up" is -90° in screen coordinates, adjusted by rotation
+        angle_rad = math.radians(-90 + rotation_angle)
+
+        # Calculate in image space
+        handle_img_x = img_cx + (handle_length / self.scale_factor) * math.cos(angle_rad)
+        handle_img_y = img_cy + (handle_length / self.scale_factor) * math.sin(angle_rad)
+
+        # Convert to canvas space
+        cx, cy = self.image_to_canvas(img_cx, img_cy)
+        handle_x, handle_y = self.image_to_canvas(handle_img_x, handle_img_y)
+
+        # Draw handle line with region color
+        self.create_line(cx, cy, handle_x, handle_y,
+                        fill=color, width=2,
+                        tags="rotation_handle")
+
+        # Draw draggable circle at end with region color
+        handle_radius = 6
+        self.create_oval(
+            handle_x - handle_radius, handle_y - handle_radius,
+            handle_x + handle_radius, handle_y + handle_radius,
+            fill=color, outline="white", width=2,
+            tags="rotation_handle"
+        )
+
+    def get_handle_at_point(self, canvas_x, canvas_y, region):
+        """Check if point is on a resize or rotation handle. Returns InteractionMode."""
+        import math
+
+        # Calculate region center in image space
+        img_cx = region.x + region.width / 2
+        img_cy = region.y + region.height / 2
+
+        # Check rotation handle first (higher priority)
+        region_size = min(region.width, region.height) * self.scale_factor
+        handle_length = min(max(region_size * 0.4, 40), 80)
+        angle_rad = math.radians(-90 + region.rotation)
+
+        # Calculate handle position in image space
+        handle_img_x = img_cx + (handle_length / self.scale_factor) * math.cos(angle_rad)
+        handle_img_y = img_cy + (handle_length / self.scale_factor) * math.sin(angle_rad)
+
+        # Convert to canvas space
+        handle_x, handle_y = self.image_to_canvas(handle_img_x, handle_img_y)
+
+        # Check if near rotation handle circle
+        handle_radius = 6
+        dist_to_rotation = math.sqrt((canvas_x - handle_x)**2 + (canvas_y - handle_y)**2)
+        if dist_to_rotation <= handle_radius + 3:  # 3px tolerance
+            return InteractionMode.ROTATING
+
+        # Check resize handles
+        # For rotated regions, check rotated handle positions
         handle_size = 8
         tolerance = handle_size / 2
 
-        # Check each handle position
-        handles = [
-            ((x1, y1), InteractionMode.RESIZING_NW),
-            (((x1+x2)/2, y1), InteractionMode.RESIZING_N),
-            ((x2, y1), InteractionMode.RESIZING_NE),
-            ((x2, (y1+y2)/2), InteractionMode.RESIZING_E),
-            ((x2, y2), InteractionMode.RESIZING_SE),
-            (((x1+x2)/2, y2), InteractionMode.RESIZING_S),
-            ((x1, y2), InteractionMode.RESIZING_SW),
-            ((x1, (y1+y2)/2), InteractionMode.RESIZING_W),
-        ]
+        if region.rotation != 0:
+            # Check rotated handle positions
+            angle_rad = math.radians(region.rotation)
+            hw = region.width / 2
+            hh = region.height / 2
+            handle_positions = [
+                ((-hw, -hh), InteractionMode.RESIZING_NW),
+                ((0, -hh), InteractionMode.RESIZING_N),
+                ((hw, -hh), InteractionMode.RESIZING_NE),
+                ((hw, 0), InteractionMode.RESIZING_E),
+                ((hw, hh), InteractionMode.RESIZING_SE),
+                ((0, hh), InteractionMode.RESIZING_S),
+                ((-hw, hh), InteractionMode.RESIZING_SW),
+                ((-hw, 0), InteractionMode.RESIZING_W),
+            ]
 
-        for (hx, hy), mode in handles:
-            if abs(canvas_x - hx) <= tolerance and abs(canvas_y - hy) <= tolerance:
-                return mode
+            for (dx, dy), mode in handle_positions:
+                # Rotate point
+                rx = dx * math.cos(angle_rad) - dy * math.sin(angle_rad)
+                ry = dx * math.sin(angle_rad) + dy * math.cos(angle_rad)
+                # Translate to image space
+                img_x = img_cx + rx
+                img_y = img_cy + ry
+                # Convert to canvas space
+                hx, hy = self.image_to_canvas(img_x, img_y)
+
+                if abs(canvas_x - hx) <= tolerance and abs(canvas_y - hy) <= tolerance:
+                    return mode
+        else:
+            # Non-rotated: use axis-aligned corners
+            x1, y1 = self.image_to_canvas(region.x, region.y)
+            x2, y2 = self.image_to_canvas(region.x + region.width, region.y + region.height)
+
+            handles = [
+                ((x1, y1), InteractionMode.RESIZING_NW),
+                (((x1+x2)/2, y1), InteractionMode.RESIZING_N),
+                ((x2, y1), InteractionMode.RESIZING_NE),
+                ((x2, (y1+y2)/2), InteractionMode.RESIZING_E),
+                ((x2, y2), InteractionMode.RESIZING_SE),
+                (((x1+x2)/2, y2), InteractionMode.RESIZING_S),
+                ((x1, y2), InteractionMode.RESIZING_SW),
+                ((x1, (y1+y2)/2), InteractionMode.RESIZING_W),
+            ]
+
+            for (hx, hy), mode in handles:
+                if abs(canvas_x - hx) <= tolerance and abs(canvas_y - hy) <= tolerance:
+                    return mode
 
         return InteractionMode.NONE
 
@@ -791,6 +1034,7 @@ class SourceImageCanvas(tk.Canvas):
             InteractionMode.RESIZING_S: "sb_v_double_arrow",
             InteractionMode.RESIZING_SW: "size_ne_sw",
             InteractionMode.RESIZING_W: "sb_h_double_arrow",
+            InteractionMode.ROTATING: "exchange",  # Circular arrow cursor for rotation
         }
         self.config(cursor=cursors.get(mode, ""))
 
