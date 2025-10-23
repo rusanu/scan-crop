@@ -262,7 +262,8 @@ def detect_photos(pil_image: Image.Image) -> List:
         for idx, (x, y, w, h) in enumerate(bounding_boxes, start=1):
             region = PhotoRegion(
                 x=x, y=y, width=w, height=h,
-                rotation=0,
+                region_rotation=0,
+                photo_rotation=0,
                 is_manual=False,
                 list_order=idx - 1,
                 name=f"Photo {idx}"  # Set default name immediately
@@ -296,10 +297,11 @@ class PhotoRegion:
     height: int
 
     # Processing parameters (applied during preview and export)
-    rotation: float = 0.0    # Rotation angle in degrees (0-360, arbitrary angles supported)
-    brightness: int = 0      # -100 to +100 (future enhancement)
-    contrast: int = 0        # -100 to +100 (future enhancement)
-    denoise: bool = False    # Noise reduction toggle (future enhancement)
+    region_rotation: float = 0.0  # Region angle on scanner (0-360°, for straightening tilted photos)
+    photo_rotation: int = 0       # Photo orientation rotation (0, 90, 180, 270 - applied AFTER straightening)
+    brightness: int = 0           # -100 to +100 (future enhancement)
+    contrast: int = 0             # -100 to +100 (future enhancement)
+    denoise: bool = False         # Noise reduction toggle (future enhancement)
 
     # Metadata
     is_manual: bool = False  # True if user-created, False if auto-detected
@@ -571,7 +573,7 @@ class SourceImageCanvas(tk.Canvas):
             angle_deg = math.degrees(angle_rad)
 
             # Convert to 0-360 range, adjusting for "up" being the reference (90° offset)
-            selected_region.rotation = (angle_deg + 90) % 360
+            selected_region.region_rotation = (angle_deg + 90) % 360
 
         else:
             # Resizing - update based on which handle
@@ -605,7 +607,8 @@ class SourceImageCanvas(tk.Canvas):
                     y=int(y),
                     width=int(width),
                     height=int(height),
-                    rotation=0,
+                    region_rotation=0,
+                    photo_rotation=0,
                     brightness=0,
                     contrast=0,
                     denoise=False,
@@ -669,7 +672,7 @@ class SourceImageCanvas(tk.Canvas):
                 width = 2
 
             # Calculate rotated rectangle corners if rotation is applied
-            if region.rotation != 0:
+            if region.region_rotation != 0:
                 # Center of region in image space
                 img_cx = region.x + region.width / 2
                 img_cy = region.y + region.height / 2
@@ -683,7 +686,7 @@ class SourceImageCanvas(tk.Canvas):
                 ]
 
                 # Rotate each corner around center
-                angle_rad = math.radians(region.rotation)
+                angle_rad = math.radians(region.region_rotation)
                 rotated_corners_img = []
                 for cx, cy in corners_img:
                     # Translate to origin
@@ -726,19 +729,19 @@ class SourceImageCanvas(tk.Canvas):
             # Use axis-aligned bounding box for handle positions
             if is_selected:
                 # For rotated regions, draw handles at rotated corners
-                if region.rotation != 0:
+                if region.region_rotation != 0:
                     # Get the actual rotated corner positions
                     img_cx = region.x + region.width / 2
                     img_cy = region.y + region.height / 2
-                    self.draw_rotated_handles(img_cx, img_cy, region.width, region.height, region.rotation)
-                    self.draw_rotation_handle_rotated(img_cx, img_cy, region.width, region.height, region.rotation, color)
+                    self.draw_rotated_handles(img_cx, img_cy, region.width, region.height, region.region_rotation)
+                    self.draw_rotation_handle_rotated(img_cx, img_cy, region.width, region.height, region.region_rotation, color)
                 else:
                     # Normal handles for non-rotated regions
                     x1, y1 = self.image_to_canvas(region.x, region.y)
                     x2, y2 = self.image_to_canvas(region.x + region.width, region.y + region.height)
                     self.draw_resize_handles(x1, y1, x2, y2)
                     self.draw_rotation_handle_rotated(region.x + region.width/2, region.y + region.height/2,
-                                                     region.width, region.height, region.rotation, color)
+                                                     region.width, region.height, region.region_rotation, color)
 
             # Show name label at top-left of region
             if region.name:
@@ -752,10 +755,10 @@ class SourceImageCanvas(tk.Canvas):
                                tags=f"region_{region.region_id}")
 
             # Show rotation indicator if rotated (center of region)
-            if region.rotation != 0:
+            if region.region_rotation != 0:
                 cx = (x1 + x2) / 2
                 cy = (y1 + y2) / 2
-                self.create_text(cx, cy, text=f"{int(round(region.rotation))}°",
+                self.create_text(cx, cy, text=f"{int(round(region.region_rotation))}°",
                                fill=color, font=("Arial", 12, "bold"),
                                tags=f"region_{region.region_id}")
 
@@ -916,7 +919,7 @@ class SourceImageCanvas(tk.Canvas):
         # Check rotation handle first (higher priority)
         region_size = min(region.width, region.height) * self.scale_factor
         handle_length = min(max(region_size * 0.4, 40), 80)
-        angle_rad = math.radians(-90 + region.rotation)
+        angle_rad = math.radians(-90 + region.region_rotation)
 
         # Calculate handle position in image space
         handle_img_x = img_cx + (handle_length / self.scale_factor) * math.cos(angle_rad)
@@ -936,9 +939,9 @@ class SourceImageCanvas(tk.Canvas):
         handle_size = 8
         tolerance = handle_size / 2
 
-        if region.rotation != 0:
+        if region.region_rotation != 0:
             # Check rotated handle positions
-            angle_rad = math.radians(region.rotation)
+            angle_rad = math.radians(region.region_rotation)
             hw = region.width / 2
             hh = region.height / 2
             handle_positions = [
@@ -1129,9 +1132,13 @@ class PhotoPreviewPanel(tk.Frame):
         # Crop from original image
         cropped = self.app_state.original_image.crop(selected_region.to_bbox())
 
-        # Apply rotation
-        if selected_region.rotation != 0:
-            cropped = cropped.rotate(-selected_region.rotation, expand=True)
+        # Apply region rotation (straighten tilted photo)
+        if selected_region.region_rotation != 0:
+            cropped = cropped.rotate(-selected_region.region_rotation, expand=True)
+
+        # Apply photo rotation (orientation correction after straightening)
+        if selected_region.photo_rotation != 0:
+            cropped = cropped.rotate(-selected_region.photo_rotation, expand=True)
 
         # Scale to fit canvas
         canvas_w = self.preview_canvas.winfo_width()
@@ -1504,17 +1511,17 @@ class PhotoCropperApp(tk.Tk):
         self.export_all_btn.config(state=tk.NORMAL if has_regions else tk.DISABLED)
 
     def rotate_selected_cw(self):
-        """Rotate selected region 90° clockwise"""
+        """Rotate selected photo 90° clockwise (for orientation correction)"""
         region = self.app_state.get_selected_region()
         if region:
-            region.rotation = (region.rotation + 90) % 360
+            region.photo_rotation = (region.photo_rotation + 90) % 360
             self.sync_selection()
 
     def rotate_selected_ccw(self):
-        """Rotate selected region 90° counter-clockwise"""
+        """Rotate selected photo 90° counter-clockwise (for orientation correction)"""
         region = self.app_state.get_selected_region()
         if region:
-            region.rotation = (region.rotation - 90) % 360
+            region.photo_rotation = (region.photo_rotation - 90) % 360
             self.sync_selection()
 
     def delete_selected_region(self):
@@ -1590,9 +1597,13 @@ class PhotoCropperApp(tk.Tk):
             # Crop from original
             cropped = self.app_state.original_image.crop(region.to_bbox())
 
-            # Apply rotation
-            if region.rotation != 0:
-                cropped = cropped.rotate(-region.rotation, expand=True)
+            # Apply region rotation (straighten tilted photo)
+            if region.region_rotation != 0:
+                cropped = cropped.rotate(-region.region_rotation, expand=True)
+
+            # Apply photo rotation (orientation correction)
+            if region.photo_rotation != 0:
+                cropped = cropped.rotate(-region.photo_rotation, expand=True)
 
             # Save with format-appropriate settings
             if format_name == "JPEG":
@@ -1648,9 +1659,13 @@ class PhotoCropperApp(tk.Tk):
                 # Crop from original
                 cropped = self.app_state.original_image.crop(region.to_bbox())
 
-                # Apply rotation
-                if region.rotation != 0:
-                    cropped = cropped.rotate(-region.rotation, expand=True)
+                # Apply region rotation (straighten tilted photo)
+                if region.region_rotation != 0:
+                    cropped = cropped.rotate(-region.region_rotation, expand=True)
+
+                # Apply photo rotation (orientation correction)
+                if region.photo_rotation != 0:
+                    cropped = cropped.rotate(-region.photo_rotation, expand=True)
 
                 # Generate filename according to config
                 if region.name:
