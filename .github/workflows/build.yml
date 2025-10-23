@@ -63,7 +63,7 @@ jobs:
 
     - name: Build executable with PyInstaller
       run: |
-        pyinstaller --onedir `
+        pyinstaller --onefile `
           --name scan-crop `
           --windowed `
           --icon=NONE `
@@ -71,7 +71,7 @@ jobs:
           --hidden-import=cv2 `
           --collect-all cv2 `
           scan_crop_gui.py
-          
+
     - name: Create zip archive
       run: |
         Compress-Archive -Path dist/scan-crop/* -DestinationPath scan-crop-${{ steps.get_version.outputs.VERSION }}.zip
