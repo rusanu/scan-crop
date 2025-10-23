@@ -12,6 +12,10 @@ from typing import Optional, List
 import uuid
 import sys
 import argparse
+import logging
+from datetime import datetime
+import traceback
+import os
 
 from PIL import Image, ImageTk
 import cv2
@@ -23,6 +27,105 @@ try:
     from version import __version__
 except ImportError:
     __version__ = "dev"
+
+
+# ============================================================================
+# Diagnostic Logging
+# ============================================================================
+
+def setup_error_logging():
+    """
+    Setup logging to capture runtime errors and diagnostic information.
+    Creates a log file in the same directory as the executable/script.
+    """
+    # Determine log file location (same directory as executable)
+    if getattr(sys, 'frozen', False):
+        # Running as PyInstaller executable
+        app_dir = Path(sys.executable).parent
+    else:
+        # Running as script
+        app_dir = Path(__file__).parent
+
+    log_file = app_dir / f"scan-crop-error-{datetime.now().strftime('%Y%m%d')}.log"
+
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file, encoding='utf-8'),
+            logging.StreamHandler(sys.stderr)
+        ]
+    )
+
+    return logging.getLogger(__name__)
+
+
+def log_opencv_diagnostics(logger):
+    """
+    Log OpenCV version and DLL location information for debugging.
+    This helps diagnose DLL loading issues on different machines.
+    """
+    logger.info("=" * 60)
+    logger.info("OpenCV Diagnostic Information")
+    logger.info("=" * 60)
+
+    # OpenCV version
+    logger.info(f"OpenCV Version: {cv2.__version__}")
+
+    # OpenCV file location
+    try:
+        opencv_path = cv2.__file__
+        logger.info(f"OpenCV Module Path: {opencv_path}")
+        logger.info(f"OpenCV Module Exists: {os.path.exists(opencv_path)}")
+    except Exception as e:
+        logger.error(f"Could not determine OpenCV path: {e}")
+
+    # Check for DLL dependencies (Windows)
+    if sys.platform == 'win32':
+        try:
+            opencv_dir = Path(cv2.__file__).parent
+            dll_files = list(opencv_dir.glob('*.dll'))
+            logger.info(f"DLL files in OpenCV directory: {len(dll_files)}")
+            for dll in dll_files[:10]:  # Log first 10 DLLs
+                logger.info(f"  - {dll.name} ({dll.stat().st_size} bytes)")
+            if len(dll_files) > 10:
+                logger.info(f"  ... and {len(dll_files) - 10} more")
+        except Exception as e:
+            logger.error(f"Could not enumerate DLLs: {e}")
+
+    # Build information
+    try:
+        build_info = cv2.getBuildInformation()
+        # Log key sections
+        for line in build_info.split('\n'):
+            if any(keyword in line.lower() for keyword in ['version', 'platform', 'compiler', 'python']):
+                logger.info(f"  {line.strip()}")
+    except Exception as e:
+        logger.error(f"Could not get build information: {e}")
+
+    # System information
+    logger.info(f"Python Version: {sys.version}")
+    logger.info(f"Platform: {sys.platform}")
+    logger.info(f"Frozen (PyInstaller): {getattr(sys, 'frozen', False)}")
+    if getattr(sys, 'frozen', False):
+        logger.info(f"Executable Path: {sys.executable}")
+        logger.info(f"MEIPASS: {getattr(sys, '_MEIPASS', 'Not set')}")
+
+    # Environment variables that might affect DLL loading
+    logger.info("Relevant Environment Variables:")
+    for var in ['PATH', 'PYTHONPATH', 'OPENCV_DIR']:
+        value = os.environ.get(var, 'Not set')
+        if var == 'PATH' and value != 'Not set':
+            # Log PATH entries separately for readability
+            logger.info(f"  {var}:")
+            for path_entry in value.split(os.pathsep)[:5]:
+                logger.info(f"    - {path_entry}")
+            logger.info(f"    ... ({len(value.split(os.pathsep))} total entries)")
+        else:
+            logger.info(f"  {var}: {value}")
+
+    logger.info("=" * 60)
 
 
 # ============================================================================
@@ -58,52 +161,62 @@ def find_photo_contours(image):
     Returns:
         List of bounding rectangles (x, y, w, h) for detected photos
     """
-    # Convert to grayscale
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    logger = logging.getLogger(__name__)
 
-    # Apply binary threshold to separate photos from background
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    try:
+        # Convert to grayscale
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # Invert if needed (photos should be white/light in binary image)
-    if np.mean(binary) < 127:
-        binary = cv2.bitwise_not(binary)
+        # Apply binary threshold to separate photos from background
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    # Morphological operations to clean up the binary image
-    kernel = np.ones((5, 5), np.uint8)
-    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
-    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
+        # Invert if needed (photos should be white/light in binary image)
+        if np.mean(binary) < 127:
+            binary = cv2.bitwise_not(binary)
 
-    # Find contours (use RETR_TREE to get nested contours)
-    contours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        # Morphological operations to clean up the binary image
+        kernel = np.ones((5, 5), np.uint8)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
 
-    # Filter contours by area and aspect ratio
-    img_area = image.shape[0] * image.shape[1]
-    min_area = img_area * 0.01   # Minimum 1% of image area
-    max_area = img_area * 0.5    # Maximum 50% of image area
-    bounding_boxes = []
+        # Find contours (use RETR_TREE to get nested contours)
+        contours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
-    for contour in contours:
-        area = cv2.contourArea(contour)
+        # Filter contours by area and aspect ratio
+        img_area = image.shape[0] * image.shape[1]
+        min_area = img_area * 0.01   # Minimum 1% of image area
+        max_area = img_area * 0.5    # Maximum 50% of image area
+        bounding_boxes = []
 
-        # Filter by area
-        if area < min_area or area > max_area:
-            continue
+        for contour in contours:
+            area = cv2.contourArea(contour)
 
-        # Get bounding rectangle
-        x, y, w, h = cv2.boundingRect(contour)
+            # Filter by area
+            if area < min_area or area > max_area:
+                continue
 
-        # Filter by aspect ratio (photos are typically between 1:2 and 2:1)
-        aspect_ratio = w / h if h > 0 else 0
-        if aspect_ratio < 0.3 or aspect_ratio > 3.5:
-            continue
+            # Get bounding rectangle
+            x, y, w, h = cv2.boundingRect(contour)
 
-        # Filter by minimum dimensions (at least 50x50 pixels)
-        if w < 50 or h < 50:
-            continue
+            # Filter by aspect ratio (photos are typically between 1:2 and 2:1)
+            aspect_ratio = w / h if h > 0 else 0
+            if aspect_ratio < 0.3 or aspect_ratio > 3.5:
+                continue
 
-        bounding_boxes.append((x, y, w, h))
+            # Filter by minimum dimensions (at least 50x50 pixels)
+            if w < 50 or h < 50:
+                continue
 
-    return bounding_boxes
+            bounding_boxes.append((x, y, w, h))
+
+        logger.info(f"Contour detection found {len(bounding_boxes)} bounding boxes")
+        return bounding_boxes
+
+    except Exception as e:
+        logger.error(f"Error in find_photo_contours: {e}")
+        logger.error(f"Image shape: {image.shape if hasattr(image, 'shape') else 'unknown'}")
+        logger.error(traceback.format_exc())
+        raise
 
 
 def detect_photos(pil_image: Image.Image) -> List:
@@ -117,33 +230,47 @@ def detect_photos(pil_image: Image.Image) -> List:
     Returns:
         List of PhotoRegion objects with detected crop regions
     """
-    # Convert PIL to OpenCV (BGR)
-    img_array = np.array(pil_image)
-    # PIL uses RGB, OpenCV uses BGR
-    if len(img_array.shape) == 3 and img_array.shape[2] == 3:
-        cv_image = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-    else:
-        cv_image = img_array
+    logger = logging.getLogger(__name__)
 
-    # Run detection
-    bounding_boxes = find_photo_contours(cv_image)
+    try:
+        # Convert PIL to OpenCV (BGR)
+        img_array = np.array(pil_image)
+        logger.info(f"Converting PIL image to OpenCV: shape={img_array.shape}, dtype={img_array.dtype}")
 
-    # Convert to PhotoRegion objects
-    # Import PhotoRegion here to avoid circular import
-    from dataclasses import dataclass, field
+        # PIL uses RGB, OpenCV uses BGR
+        if len(img_array.shape) == 3 and img_array.shape[2] == 3:
+            cv_image = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+        else:
+            cv_image = img_array
 
-    regions = []
-    for idx, (x, y, w, h) in enumerate(bounding_boxes, start=1):
-        region = PhotoRegion(
-            x=x, y=y, width=w, height=h,
-            rotation=0,
-            is_manual=False,
-            list_order=idx - 1,
-            name=f"Photo {idx}"  # Set default name immediately
-        )
-        regions.append(region)
+        logger.info(f"OpenCV image prepared: shape={cv_image.shape}")
 
-    return regions
+        # Run detection
+        bounding_boxes = find_photo_contours(cv_image)
+
+        # Convert to PhotoRegion objects
+        # Import PhotoRegion here to avoid circular import
+        from dataclasses import dataclass, field
+
+        regions = []
+        for idx, (x, y, w, h) in enumerate(bounding_boxes, start=1):
+            region = PhotoRegion(
+                x=x, y=y, width=w, height=h,
+                rotation=0,
+                is_manual=False,
+                list_order=idx - 1,
+                name=f"Photo {idx}"  # Set default name immediately
+            )
+            regions.append(region)
+
+        logger.info(f"Created {len(regions)} PhotoRegion objects")
+        return regions
+
+    except Exception as e:
+        logger.error(f"Error in detect_photos: {e}")
+        logger.error(f"PIL image size: {pil_image.size}, mode: {pil_image.mode}")
+        logger.error(traceback.format_exc())
+        raise
 
 
 # ============================================================================
@@ -1436,8 +1563,10 @@ Tip: Hold arrow keys for continuous movement/resizing"""
 
     def load_image(self, path: Path):
         """Load image and run detection"""
+        logger = logging.getLogger(__name__)
         try:
             # Load image
+            logger.info(f"Loading image: {path}")
             self.app_state.image_path = path
             self.app_state.original_image = Image.open(path)
 
@@ -1449,14 +1578,18 @@ Tip: Hold arrow keys for continuous movement/resizing"""
                 # Default to JPEG for unknown formats
                 self.app_state.source_format = "JPEG"
 
+            logger.info(f"Image loaded: {self.app_state.original_image.size}, format={source_format}")
+
             # Run detection
             print(f"Running detection on {path.name}...")
+            logger.info("Starting photo detection")
             detected_regions = detect_photos(self.app_state.original_image)
 
             # Store detected regions
             self.app_state.photo_regions = detected_regions
 
             print(f"Found {len(detected_regions)} photo(s)")
+            logger.info(f"Detection complete: found {len(detected_regions)} photo(s)")
 
             # Update both panels
             self.source_canvas.refresh()
@@ -1482,9 +1615,9 @@ Tip: Hold arrow keys for continuous movement/resizing"""
                 )
 
         except Exception as e:
+            logger.error(f"Error loading image {path}: {e}")
+            logger.error(traceback.format_exc())
             messagebox.showerror("Error Loading Image", str(e))
-            import traceback
-            traceback.print_exc()
 
     def show_preferences(self):
         """Show preferences dialog"""
@@ -1524,6 +1657,9 @@ Tip: Hold arrow keys for continuous movement/resizing"""
 
 def main():
     """Main entry point with command-line argument support"""
+    # Setup logging first
+    logger = setup_error_logging()
+
     # Parse command-line arguments
     parser = argparse.ArgumentParser(
         description="Photo Cropper - Extract individual photos from scanned images"
@@ -1534,27 +1670,74 @@ def main():
         type=str,
         help="Path to image file to open automatically (optional)"
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging with OpenCV diagnostics"
+    )
 
     args = parser.parse_args()
 
-    # Convert image path to Path object if provided
-    initial_image = None
-    if args.image:
-        initial_image = Path(args.image)
+    try:
+        # Log diagnostic information if debug mode
+        if args.debug:
+            log_opencv_diagnostics(logger)
 
-        # Validate that the file exists
-        if not initial_image.exists():
-            print(f"Error: Image file not found: {args.image}", file=sys.stderr)
-            sys.exit(1)
+        logger.info(f"Starting scan-crop GUI v{__version__}")
 
-        # Validate that it's a file (not a directory)
-        if not initial_image.is_file():
-            print(f"Error: Path is not a file: {args.image}", file=sys.stderr)
-            sys.exit(1)
+        # Convert image path to Path object if provided
+        initial_image = None
+        if args.image:
+            initial_image = Path(args.image)
+            logger.info(f"Command-line image argument: {args.image}")
 
-    # Create and run the application
-    app = PhotoCropperApp(initial_image_path=initial_image)
-    app.mainloop()
+            # Validate that the file exists
+            if not initial_image.exists():
+                logger.error(f"Image file not found: {args.image}")
+                print(f"Error: Image file not found: {args.image}", file=sys.stderr)
+                sys.exit(1)
+
+            # Validate that it's a file (not a directory)
+            if not initial_image.is_file():
+                logger.error(f"Path is not a file: {args.image}")
+                print(f"Error: Path is not a file: {args.image}", file=sys.stderr)
+                sys.exit(1)
+
+        # Create and run the application
+        app = PhotoCropperApp(initial_image_path=initial_image)
+        logger.info("Application initialized successfully")
+        app.mainloop()
+        logger.info("Application closed normally")
+
+    except Exception as e:
+        # Log any uncaught exceptions with full diagnostics
+        logger.error("=" * 60)
+        logger.error("FATAL ERROR OCCURRED")
+        logger.error("=" * 60)
+        logger.error(f"Error: {str(e)}")
+        logger.error(f"Error Type: {type(e).__name__}")
+        logger.error("Stack Trace:")
+        logger.error(traceback.format_exc())
+
+        # Always log OpenCV diagnostics on fatal errors
+        logger.error("\nLogging OpenCV diagnostics due to fatal error:")
+        try:
+            log_opencv_diagnostics(logger)
+        except Exception as diag_error:
+            logger.error(f"Could not log diagnostics: {diag_error}")
+
+        # Show error to user
+        try:
+            messagebox.showerror(
+                "Fatal Error",
+                f"An unexpected error occurred:\n\n{str(e)}\n\n"
+                f"Error details have been logged to scan-crop-error-{datetime.now().strftime('%Y%m%d')}.log"
+            )
+        except:
+            print(f"\nFATAL ERROR: {str(e)}", file=sys.stderr)
+            print(f"Error details have been logged. Please check the log file.", file=sys.stderr)
+
+        sys.exit(1)
 
 
 if __name__ == "__main__":
