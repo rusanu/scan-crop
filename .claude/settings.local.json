@@ -28,7 +28,9 @@
       "Bash(git rm:*)",
       "Bash(git push)",
       "Bash(git tag:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(.\\venv\\Scripts\\python.exe:*)",
+      "Read(//c/Users/Remus/Downloads/**)"
     ],
     "deny": [],
     "ask": []
