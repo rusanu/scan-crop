@@ -104,6 +104,40 @@ scan-crop uses OpenCV computer vision to:
 6. Present detected regions in an interactive GUI for review and adjustment
 7. Apply rotations and export each photo as a high-quality JPEG (95% quality)
 
+## Troubleshooting
+
+### OpenCV DLL Loading Errors
+
+If you encounter errors related to OpenCV DLLs (especially "Invalid number of channels" or similar errors), the application includes diagnostic logging to help identify the issue.
+
+**To generate diagnostic logs:**
+
+1. Run the application with the `--debug` flag:
+   ```cmd
+   scan-crop.exe --debug path\to\image.jpg
+   ```
+
+2. A log file will be created in the same directory as the executable: `scan-crop-error-YYYYMMDD.log`
+
+3. The log file contains:
+   - OpenCV version and installation path
+   - DLL files being used
+   - Python environment details
+   - System PATH information
+   - Full error stack traces
+
+4. If the application crashes, diagnostic information is automatically logged
+
+**Common causes:**
+- Conflicting OpenCV installations on your system
+- Missing or incompatible DLL files
+- System environment variables pointing to wrong OpenCV versions
+
+**Solutions:**
+- Try running from a clean directory without other OpenCV installations in PATH
+- Check the log file for DLL paths and ensure they match the packaged version
+- Report the log file contents when filing a bug report
+
 ## License
 
 This project is free to use and modify.

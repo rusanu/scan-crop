@@ -49,6 +49,10 @@ output/
 # Debug files
 debug_*
 
+# Log files
+scan-crop-error-*.log
+*.log
+
 # Distribution
 *.exe
 *.spec
