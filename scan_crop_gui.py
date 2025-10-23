@@ -1140,17 +1140,20 @@ class PhotoPreviewPanel(tk.Frame):
             cx = selected_region.x + selected_region.width / 2
             cy = selected_region.y + selected_region.height / 2
 
-            # Rotate entire source image around this point
-            # First, we need to translate so center is at origin, rotate, translate back
-            # PIL rotate() rotates around image center, so we use a different approach:
+            # Determine fillcolor based on image mode (grayscale vs RGB)
+            if self.app_state.original_image.mode == 'L':
+                fillcolor = 255  # White for grayscale
+            elif self.app_state.original_image.mode == 'RGB':
+                fillcolor = (255, 255, 255)  # White for RGB
+            else:
+                fillcolor = 255  # Default
 
-            # Get the source image and rotate it
-            # Use expand=False to keep same dimensions, fillcolor to handle edges
+            # Rotate entire source image around region center
             rotated_source = self.app_state.original_image.rotate(
                 -selected_region.region_rotation,  # Negative to straighten
                 center=(cx, cy),
                 expand=False,
-                fillcolor=(255, 255, 255)
+                fillcolor=fillcolor
             )
 
             # Now crop the straightened rectangle from the rotated source
@@ -1628,7 +1631,7 @@ class PhotoCropperApp(tk.Tk):
                     -region.region_rotation,
                     center=(cx, cy),
                     expand=False,
-                    fillcolor=(255, 255, 255)
+                    fillcolor=(255 if self.app_state.original_image.mode == "L" else (255, 255, 255))
                 )
 
                 # Crop the straightened rectangle
@@ -1703,7 +1706,7 @@ class PhotoCropperApp(tk.Tk):
                         -region.region_rotation,
                         center=(cx, cy),
                         expand=False,
-                        fillcolor=(255, 255, 255)
+                        fillcolor=(255 if self.app_state.original_image.mode == "L" else (255, 255, 255))
                     )
 
                     # Crop the straightened rectangle
