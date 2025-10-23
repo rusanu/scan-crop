@@ -68,6 +68,9 @@ jobs:
           --windowed `
           --icon=NONE `
           --add-data "version.py;." `
+          --hidden-import=cv2 `
+          --hidden-import=numpy.core._dtype_ctypes `
+          --collect-all cv2 `
           scan_crop_gui.py
 
     - name: Upload build artifact
