@@ -156,7 +156,7 @@ def find_photo_contours(image):
     Detect individual photos in the scanned image using contour detection.
 
     Args:
-        image: OpenCV image (BGR format)
+        image: OpenCV image (BGR or grayscale format)
 
     Returns:
         List of bounding rectangles (x, y, w, h) for detected photos
@@ -164,8 +164,13 @@ def find_photo_contours(image):
     logger = logging.getLogger(__name__)
 
     try:
-        # Convert to grayscale
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # Convert to grayscale if needed
+        if len(image.shape) == 3:
+            # Color image (BGR) - convert to grayscale
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            # Already grayscale
+            gray = image
 
         # Apply binary threshold to separate photos from background
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
