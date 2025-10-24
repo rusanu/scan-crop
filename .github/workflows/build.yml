@@ -38,11 +38,21 @@ jobs:
           echo "VERSION=$version" >> $env:GITHUB_OUTPUT
           echo "IS_RELEASE=true" >> $env:GITHUB_OUTPUT
           # Update version.py with tag version
+          # Parse version parts (handle pre-release like 1.0.1-rc1)
+          if ($version -match '^(\d+)\.(\d+)\.(\d+)') {
+            $major = $matches[1]
+            $minor = $matches[2]
+            $patch = $matches[3]
+          } else {
+            $major = 0
+            $minor = 0
+            $patch = 0
+          }
           $content = @"
         """Version information for scan-crop"""
 
         __version__ = "$version"
-        __version_info__ = tuple(map(int, "$version".split('.')))
+        __version_info__ = ($major, $minor, $patch)
         "@
           $content | Set-Content -Path version.py
         } else {
@@ -74,7 +84,7 @@ jobs:
 
     - name: Create zip archive
       run: |
-        Compress-Archive -Path dist/scan-crop/* -DestinationPath scan-crop-${{ steps.get_version.outputs.VERSION }}.zip
+        Compress-Archive -Path dist/* -DestinationPath scan-crop-${{ steps.get_version.outputs.VERSION }}.zip
 
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
