@@ -1515,6 +1515,38 @@ class PhotoCropperApp(tk.Tk):
             region.photo_rotation = (region.photo_rotation - 90) % 360
             self.sync_selection()
 
+    def rotate_selected_region_fine(self, direction):
+        """
+        Rotate selected region by fine increment (simulates moving rotation handle by ~1 pixel).
+        direction: 1 for clockwise (D key), -1 for counter-clockwise (A key)
+        """
+        import math
+
+        region = self.app_state.get_selected_region()
+        if not region:
+            return
+
+        # Calculate angle increment based on rotation handle position
+        # The handle length is proportional to region size
+        region_size = min(region.width, region.height) * self.source_canvas.scale_factor
+        handle_length = min(max(region_size * 0.4, 40), 80)  # Same formula as in draw_rotation_handle_rotated
+
+        # For a 1-pixel movement along the arc at distance handle_length:
+        # arc_length = radius * angle_in_radians
+        # 1 pixel = handle_length * angle_in_radians
+        # angle_in_radians = 1 / handle_length
+        angle_increment_rad = 1.0 / handle_length
+        angle_increment_deg = math.degrees(angle_increment_rad)
+
+        # Apply rotation
+        region.region_rotation = (region.region_rotation + direction * angle_increment_deg) % 360
+
+        # Refresh display
+        self.sync_selection()
+
+        # Prevent key from propagating (e.g., to text fields)
+        return "break"
+
     def delete_selected_region(self):
         """Delete the currently selected region"""
         region = self.app_state.get_selected_region()
@@ -1736,6 +1768,12 @@ class PhotoCropperApp(tk.Tk):
         self.bind("<Tab>", lambda e: self.cycle_selection(1))
         self.bind("<Shift-Tab>", lambda e: self.cycle_selection(-1))
 
+        # Rotation keys (A = counter-clockwise, D = clockwise)
+        self.bind("a", lambda e: self.rotate_selected_region_fine(-1))
+        self.bind("A", lambda e: self.rotate_selected_region_fine(-1))
+        self.bind("d", lambda e: self.rotate_selected_region_fine(1))
+        self.bind("D", lambda e: self.rotate_selected_region_fine(1))
+
     def show_welcome(self):
         """Show welcome message on empty canvas"""
         self.source_canvas.create_text(
@@ -1818,10 +1856,14 @@ Movement:
   Arrow keys          Move selected region (1 pixel)
   Shift+Arrow keys    Resize selected region (1 pixel)
 
+Rotation:
+  A                   Rotate counter-clockwise (fine control)
+  D                   Rotate clockwise (fine control)
+
 Actions:
   Delete              Delete selected region
 
-Tip: Hold arrow keys for continuous movement/resizing"""
+Tip: Hold keys for continuous movement/resizing/rotation"""
 
         messagebox.showinfo("Keyboard Shortcuts", shortcuts_text)
 
