@@ -1083,6 +1083,53 @@ class PhotoPreviewPanel(tk.Frame):
         """Handle canvas resize"""
         self.refresh()
 
+    def draw_alignment_grid(self, center_x, center_y, img_width, img_height):
+        """
+        Draw alignment grid overlay on preview image.
+        Shows a 3x3 grid (rule of thirds) to help with rotation alignment.
+        """
+        # Calculate image bounds (centered on canvas)
+        x1 = center_x - img_width / 2
+        y1 = center_y - img_height / 2
+        x2 = center_x + img_width / 2
+        y2 = center_y + img_height / 2
+
+        # Grid color (semi-transparent looking gray)
+        grid_color = "#888888"
+        line_width = 1
+
+        # Draw vertical lines (rule of thirds)
+        for i in range(1, 3):  # 2 vertical lines at 1/3 and 2/3
+            x = x1 + (img_width * i / 3)
+            self.preview_canvas.create_line(
+                x, y1, x, y2,
+                fill=grid_color, width=line_width, dash=(4, 4),
+                tags="grid"
+            )
+
+        # Draw horizontal lines (rule of thirds)
+        for i in range(1, 3):  # 2 horizontal lines at 1/3 and 2/3
+            y = y1 + (img_height * i / 3)
+            self.preview_canvas.create_line(
+                x1, y, x2, y,
+                fill=grid_color, width=line_width, dash=(4, 4),
+                tags="grid"
+            )
+
+        # Draw center crosshair for precise alignment
+        # Vertical center line
+        self.preview_canvas.create_line(
+            center_x, y1, center_x, y2,
+            fill=grid_color, width=line_width, dash=(2, 2),
+            tags="grid"
+        )
+        # Horizontal center line
+        self.preview_canvas.create_line(
+            x1, center_y, x2, center_y,
+            fill=grid_color, width=line_width, dash=(2, 2),
+            tags="grid"
+        )
+
     def on_name_changed(self, event):
         """Handle name entry change (on Enter or focus loss)"""
         selected_region = self.app_state.get_selected_region()
@@ -1153,10 +1200,15 @@ class PhotoPreviewPanel(tk.Frame):
 
         # Convert to PhotoImage and display centered
         self.photo_image = ImageTk.PhotoImage(cropped)
+        img_x = canvas_w / 2
+        img_y = canvas_h / 2
         self.preview_canvas.create_image(
-            canvas_w / 2, canvas_h / 2,
+            img_x, img_y,
             image=self.photo_image
         )
+
+        # Draw alignment grid overlay (helps with rotation alignment)
+        self.draw_alignment_grid(img_x, img_y, cropped.size[0], cropped.size[1])
 
 
 # ============================================================================
