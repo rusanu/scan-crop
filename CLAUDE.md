@@ -4,6 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Note**: This project uses [bd (beads)](https://github.com/steveyegge/beads) for issue tracking. Use `bd` commands instead of markdown TODOs. See [AGENTS.md](AGENTS.md) for workflow details.
 
+**workflow**: 
+- after fixing an issue stop and ask the user to confiorm the fix (run the app and manually validate). Only close the issue and commit after the user confirms the fix
+- do not push. push consumes GitHub Actions time so let the user decide when to push
+- do not add version tags. Let the user decide the release criteria
+
 ## Project Overview
 
 scan-crop is a Python CLI tool that processes scanned JPG images containing multiple physical photos and automatically crops out individual photos as separate files.

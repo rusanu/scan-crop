@@ -1055,6 +1055,7 @@ class PhotoPreviewPanel(tk.Frame):
         self.app_state = app_state
         self.app = app
         self.photo_image = None  # Keep reference to prevent GC
+        self.show_grid = True  # Grid enabled by default
 
         # Info label (photo number)
         self.info_label = tk.Label(self, text="", font=("Arial", 10, "bold"),
@@ -1083,52 +1084,84 @@ class PhotoPreviewPanel(tk.Frame):
         """Handle canvas resize"""
         self.refresh()
 
+    def toggle_grid(self):
+        """Toggle alignment grid on/off"""
+        self.show_grid = not self.show_grid
+        self.refresh()
+
     def draw_alignment_grid(self, center_x, center_y, img_width, img_height):
         """
-        Draw alignment grid overlay on preview image.
-        Shows a 3x3 grid (rule of thirds) to help with rotation alignment.
+        Draw alignment grid overlay centered on the canvas/photo.
+        Grid spreads outward from center symmetrically to help with
+        rotation alignment and margin checking.
         """
-        # Calculate image bounds (centered on canvas)
-        x1 = center_x - img_width / 2
-        y1 = center_y - img_height / 2
-        x2 = center_x + img_width / 2
-        y2 = center_y + img_height / 2
+        # Get canvas dimensions
+        canvas_w = self.preview_canvas.winfo_width()
+        canvas_h = self.preview_canvas.winfo_height()
 
-        # Grid color (semi-transparent looking gray)
-        grid_color = "#888888"
+        if canvas_w <= 1 or canvas_h <= 1:
+            return  # Canvas not yet sized
+
+        # Grid settings
+        grid_color = "#AAAAAA"  # Medium gray
         line_width = 1
+        grid_spacing = 50  # Grid lines every 50 pixels
 
-        # Draw vertical lines (rule of thirds)
-        for i in range(1, 3):  # 2 vertical lines at 1/3 and 2/3
-            x = x1 + (img_width * i / 3)
-            self.preview_canvas.create_line(
-                x, y1, x, y2,
-                fill=grid_color, width=line_width, dash=(4, 4),
-                tags="grid"
-            )
+        # Center of canvas (same as photo center since photo is centered)
+        cx = canvas_w / 2
+        cy = canvas_h / 2
 
-        # Draw horizontal lines (rule of thirds)
-        for i in range(1, 3):  # 2 horizontal lines at 1/3 and 2/3
-            y = y1 + (img_height * i / 3)
-            self.preview_canvas.create_line(
-                x1, y, x2, y,
-                fill=grid_color, width=line_width, dash=(4, 4),
-                tags="grid"
-            )
-
-        # Draw center crosshair for precise alignment
-        # Vertical center line
+        # Draw center vertical line
         self.preview_canvas.create_line(
-            center_x, y1, center_x, y2,
-            fill=grid_color, width=line_width, dash=(2, 2),
+            cx, 0, cx, canvas_h,
+            fill=grid_color, width=line_width, dash=(4, 4),
             tags="grid"
         )
-        # Horizontal center line
+
+        # Draw center horizontal line
         self.preview_canvas.create_line(
-            x1, center_y, x2, center_y,
-            fill=grid_color, width=line_width, dash=(2, 2),
+            0, cy, canvas_w, cy,
+            fill=grid_color, width=line_width, dash=(4, 4),
             tags="grid"
         )
+
+        # Draw vertical lines spreading from center
+        offset = grid_spacing
+        while offset < max(cx, canvas_w - cx):
+            # Line to the right of center
+            if cx + offset < canvas_w:
+                self.preview_canvas.create_line(
+                    cx + offset, 0, cx + offset, canvas_h,
+                    fill=grid_color, width=line_width, dash=(4, 4),
+                    tags="grid"
+                )
+            # Line to the left of center
+            if cx - offset > 0:
+                self.preview_canvas.create_line(
+                    cx - offset, 0, cx - offset, canvas_h,
+                    fill=grid_color, width=line_width, dash=(4, 4),
+                    tags="grid"
+                )
+            offset += grid_spacing
+
+        # Draw horizontal lines spreading from center
+        offset = grid_spacing
+        while offset < max(cy, canvas_h - cy):
+            # Line below center
+            if cy + offset < canvas_h:
+                self.preview_canvas.create_line(
+                    0, cy + offset, canvas_w, cy + offset,
+                    fill=grid_color, width=line_width, dash=(4, 4),
+                    tags="grid"
+                )
+            # Line above center
+            if cy - offset > 0:
+                self.preview_canvas.create_line(
+                    0, cy - offset, canvas_w, cy - offset,
+                    fill=grid_color, width=line_width, dash=(4, 4),
+                    tags="grid"
+                )
+            offset += grid_spacing
 
     def on_name_changed(self, event):
         """Handle name entry change (on Enter or focus loss)"""
@@ -1208,7 +1241,8 @@ class PhotoPreviewPanel(tk.Frame):
         )
 
         # Draw alignment grid overlay (helps with rotation alignment)
-        self.draw_alignment_grid(img_x, img_y, cropped.size[0], cropped.size[1])
+        if self.show_grid:
+            self.draw_alignment_grid(img_x, img_y, cropped.size[0], cropped.size[1])
 
 
 # ============================================================================
@@ -1489,6 +1523,15 @@ class PhotoCropperApp(tk.Tk):
         )
         self.rotate_cw_btn.pack(side=tk.LEFT, padx=2, pady=2)
 
+        # Grid toggle button
+        self.grid_toggle_btn = tk.Button(
+            self.toolbar, text="⊞ Grid",
+            command=self.toggle_grid,
+            state=tk.DISABLED,
+            relief=tk.SUNKEN  # Sunken by default since grid is on
+        )
+        self.grid_toggle_btn.pack(side=tk.LEFT, padx=2, pady=2)
+
         # Separator
         tk.Frame(self.toolbar, width=2, bg="gray", relief=tk.SUNKEN).pack(
             side=tk.LEFT, fill=tk.Y, padx=5, pady=2
@@ -1547,6 +1590,7 @@ class PhotoCropperApp(tk.Tk):
         state = tk.NORMAL if has_selection else tk.DISABLED
         self.rotate_ccw_btn.config(state=state)
         self.rotate_cw_btn.config(state=state)
+        self.grid_toggle_btn.config(state=state)
         self.delete_btn.config(state=state)
         self.export_selected_btn.config(state=state)
 
@@ -1566,6 +1610,15 @@ class PhotoCropperApp(tk.Tk):
         if region:
             region.photo_rotation = (region.photo_rotation - 90) % 360
             self.sync_selection()
+
+    def toggle_grid(self):
+        """Toggle alignment grid in preview panel"""
+        self.photo_preview.toggle_grid()
+        # Update button appearance (sunken when grid is on, raised when off)
+        if self.photo_preview.show_grid:
+            self.grid_toggle_btn.config(relief=tk.SUNKEN)
+        else:
+            self.grid_toggle_btn.config(relief=tk.RAISED)
 
     def rotate_selected_region_fine(self, direction):
         """
