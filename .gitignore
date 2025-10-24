@@ -59,3 +59,6 @@ scan-crop-error-*.log
 
 #beads
 .beads/*.db
+
+#claude
+.claude/settings.local.json
